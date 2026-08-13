@@ -31,7 +31,16 @@ public class FakeStoreClient : IStoreClient
     public List<(string PackageId, string Repository)> Claims { get; } = new();
 
     public string StoreBaseUrl => "https://store.test";
+    public List<StoreCategory> Categories { get; } = new()
+    {
+        new StoreCategory("other", "Other"),
+        new StoreCategory("analyzer", "Analyzer"),
+        new StoreCategory("operation", "Operation"),
+    };
+
     public Task<StoreCard?> GetCard(string slugOrPackageId) => Task.FromResult(Card);
+    public Task<IReadOnlyList<StoreCategory>> GetCategories() =>
+        Task.FromResult<IReadOnlyList<StoreCategory>>(Categories);
 
     public Task<string?> ClaimPackage(string packageId, string repository, string accessToken)
     {

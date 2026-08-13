@@ -26,7 +26,9 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
     public async Task<string> CreateExtensionRepo(
         [Description("Extension name in PascalCase, e.g. MyToolpathHelper (also becomes the packageId)")] string name,
         [Description("Directory to clone into (the repo lands in <targetDir>/<name>). Default: current directory")] string? targetDir = null,
-        [Description("GitHub org for the repo; empty = the author's personal account")] string? org = null)
+        [Description("GitHub org for the repo; empty = the author's personal account")] string? org = null,
+        [Description("Store category id for the card, e.g. operation, analyzer, geometry-io. The "
+                     + "template ships 'other', which is where an unsorted extension lands")] string? category = null)
     {
         if (!TemplateRenamer.IsValidName(name))
             return $"ERROR: '{name}' is not a valid extension name — PascalCase letters/digits/dots, starting with a letter.";
@@ -63,6 +65,20 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             return $"ERROR: created {full} but the clone failed:\n{clone.StdErr.Trim()}";
 
         int touched = TemplateRenamer.Rename(cloneDir, name);
+        // Sorted from the first commit, not from the first moderation queue: the template ships
+        // "other", and an author who knows what they are building should not have to fix that later
+        // through a web dialog.
+        string? categoryNote = null;
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var wanted = category.Trim().ToLowerInvariant();
+            var known = await store.GetCategories();
+            if (known.Count > 0 && !known.Any(k => k.Id == wanted))
+                return $"ERROR: the store has no category '{wanted}'. Known: "
+                       + string.Join(", ", known.Select(k => k.Id)) + ".";
+            PackageInfo.SetCategory(cloneDir, wanted);
+            categoryNote = $"category: {wanted}";
+        }
         await proc.Run("git", "add -A", cloneDir);
         var commit = await proc.Run("git", $"commit -m \"Rename template extension to {name}\"", cloneDir);
         if (!commit.Ok) return $"ERROR: rename commit failed:\n{commit.Output.Trim()}";
@@ -79,7 +95,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             Created {full} from the ENCY extension template.
 
             - local clone: {cloneDir}
-            - renamed EncyExtension -> {name} ({touched} files) and pushed
+            - renamed EncyExtension -> {name} ({touched} files){(categoryNote != null ? ", " + categoryNote : "")} and pushed
             - {authNote}
 
             Next steps:
@@ -124,7 +140,10 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         [Description("Version to publish, semver: 1.2.3. Leave empty for the next patch after the "
                      + "latest tag (0.1.0 for a repo that has never been released)")] string? version = null,
         [Description("Extension repo directory. Default: current directory")] string? repoDir = null,
-        [Description("true = commit all pending changes as 'Release v<version>' before tagging")] bool commitAll = false)
+        [Description("true = commit all pending changes as 'Release v<version>' before tagging")] bool commitAll = false,
+        [Description("Store category id for the card, e.g. operation, analyzer, geometry-io. Written "
+                     + "into src/package.info.json, so it holds for this and every later publish. "
+                     + "Leave empty to keep what the repo already says")] string? category = null)
     {
         var dir = Path.GetFullPath(repoDir ?? ".");
         string? chosenNote = null;
@@ -152,6 +171,32 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             if (!c.Ok) return $"ERROR: commit failed:\n{c.Output.Trim()}";
         }
 
+        // The category is a field in the manifest, not a flag on this call: a tag push carries only a
+        // name, and the server packer turns that field into the `category:<id>` tag the store reads
+        // as a hint (it fills an empty category and never overrules a person). Written AFTER the
+        // clean-tree check on purpose — a refused publish must not leave an edit behind.
+        string? categoryNote = null;
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var wanted = category.Trim().ToLowerInvariant();
+            var known = await store.GetCategories();
+            if (known.Count > 0 && known.All(k => k.Id != wanted))
+                return $"ERROR: the store has no category '{wanted}'. Known: "
+                       + string.Join(", ", known.Select(k => k.Id)) + ".";
+            try
+            {
+                if (PackageInfo.SetCategory(dir, wanted))
+                {
+                    await proc.Run("git", "add src/package.info.json", dir);
+                    var cc = await proc.Run("git", $"commit -m \"Set the store category to {wanted}\"", dir);
+                    if (!cc.Ok) return $"ERROR: could not commit the category change:\n{cc.Output.Trim()}";
+                    categoryNote = $"category set to {wanted} in src/package.info.json (committed)";
+                }
+                else categoryNote = $"category was already {wanted}";
+            }
+            catch (FileNotFoundException e) { return $"ERROR: {e.Message}"; }
+        }
+
         var existing = await proc.Run("git", $"rev-parse -q --verify refs/tags/{tag}", dir);
         if (existing.Ok)
             return $"ERROR: tag {tag} already exists — bump the version.";
@@ -167,7 +212,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         var run = await LatestRun(dir);
 
         return $"""
-            Pushed {tag} — GitHub Actions is building and publishing.
+            Pushed {tag} — GitHub Actions is building and publishing.{(categoryNote != null ? " " + categoryNote + "." : "")}
             {(chosenNote != null ? chosenNote + "\n" : "")}
             {(run != null ? $"workflow run: {run.Value.Url} ({run.Value.Status})" : "the workflow run has not registered yet")}
 

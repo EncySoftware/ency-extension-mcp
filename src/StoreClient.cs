@@ -8,10 +8,20 @@ public record StoreCard(string Slug, bool Approved, bool Unlisted, string? Lates
     public string CardUrl(string storeBase) => $"{storeBase}/extension/{Slug}";
 }
 
+/** A storefront category as the store publishes it; archived ones never reach here. */
+public record StoreCategory(string Id, string Caption);
+
 public interface IStoreClient
 {
     /** Card by slug or packageId; null when the store has no such extension (yet). */
     Task<StoreCard?> GetCard(string slugOrPackageId);
+
+    /**
+     * The categories an extension may be sorted into. Read live rather than hardcoded: the list is
+     * rows in the store's database precisely so it can grow without a release, and a tool shipping
+     * its own copy would start refusing categories that exist.
+     */
+    Task<IReadOnlyList<StoreCategory>> GetCategories();
 
     /**
      * Bind the repository to the package name up front, so the first CI publish authenticates with
@@ -46,6 +56,23 @@ public class StoreClient : IStoreClient
             r.TryGetProperty("approved", out var a) && a.GetBoolean(),
             r.TryGetProperty("unlisted", out var u) && u.GetBoolean(),
             r.TryGetProperty("latestVersion", out var v) ? v.GetString() : null);
+    }
+
+    public async Task<IReadOnlyList<StoreCategory>> GetCategories()
+    {
+        var resp = await Http.GetAsync($"{_apiBase}/categories");
+        if (!resp.IsSuccessStatusCode) return Array.Empty<StoreCategory>();
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var list = new List<StoreCategory>();
+        foreach (var c in doc.RootElement.GetProperty("categories").EnumerateArray())
+        {
+            if (c.TryGetProperty("archived", out var arch) && arch.GetBoolean()) continue;
+            var id = c.GetProperty("id").GetString();
+            if (id is null) continue;
+            list.Add(new StoreCategory(id,
+                c.TryGetProperty("caption", out var cap) ? cap.GetString() ?? id : id));
+        }
+        return list;
     }
 
     public async Task<string?> ClaimPackage(string packageId, string repository, string accessToken)

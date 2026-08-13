@@ -12,7 +12,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>ency-extension-mcp</ToolCommandName>
     <PackageId>EncySoftware.ExtensionStoreMcp</PackageId>
-    <Version>0.1.8</Version>
+    <Version>0.1.9</Version>
     <Authors>EncySoftware</Authors>
     <Description>MCP server for Cursor: create, publish and track ENCY extensions in the ENCY Extension Store</Description>
     <PackageProjectUrl>https://github.com/EncySoftware/ency-extension-mcp</PackageProjectUrl>
