@@ -1,0 +1,60 @@
+# Publish the dotnet tool to nuget.org — without a key.
+#
+# nuget.org supports Trusted Publishing from GitHub Actions: the run proves who it is with its own
+# OIDC token and gets a short-lived API key in exchange (NuGet/login@v1). Same shape as the ENCY
+# store's own trusted publishing, and for the same reason — a long-lived key in repository secrets is
+# a credential somebody has to store, rotate and eventually leak. nuget.org itself now says API keys
+# are discouraged for automated publishing.
+#
+# One-time setup on nuget.org (Account → Trusted Publishing): package
+# EncySoftware.ExtensionStoreMcp, repository owner EncySoftware, repository ency-extension-mcp,
+# workflow file release.yml. Nothing is stored in this repository.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # For a tag that was pushed before this workflow existed, or a re-run after a failed push.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write     # the whole point: this is what NuGet/login exchanges
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Tests first: a tool that publishes what it never ran is how a broken release reaches authors.
+      - run: dotnet test tests/EncyExtensionMcp.Tests.csproj -c Release --nologo
+
+      # From a tag, the tag IS the version — the csproj cannot drift away from what was released.
+      # From a manual run there is no tag, so the csproj decides.
+      - name: Pack
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            dotnet pack src/EncyExtensionMcp.csproj -c Release -o artifacts --nologo \
+              -p:Version="${GITHUB_REF_NAME#v}"
+          else
+            dotnet pack src/EncyExtensionMcp.csproj -c Release -o artifacts --nologo
+          fi
+
+      - uses: NuGet/login@v1
+        id: login
+        with:
+          user: galilenar
+
+      # --skip-duplicate: a re-run of the same version must not fail the workflow — the package is
+      # already where it belongs, and a red run would say otherwise.
+      - name: Push
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --source https://api.nuget.org/v3/index.json
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --skip-duplicate
