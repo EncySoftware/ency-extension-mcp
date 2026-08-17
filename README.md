@@ -6,7 +6,7 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 | Tool | What it does |
 |---|---|
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
-| `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://dmc.encycam.com/store). |
+| `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
 | `get_extension_guide` | The skill library: which of the eight ENCY entry points to implement, how to register it, a minimal skeleton and the traps. `type=list` first, then the type. |
 

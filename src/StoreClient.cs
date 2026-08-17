@@ -40,7 +40,7 @@ public class StoreClient : IStoreClient
 
     /** API base; override with ENCY_STORE_API for test stands. */
     private readonly string _apiBase =
-        (Environment.GetEnvironmentVariable("ENCY_STORE_API") ?? "https://dmc.encycam.com/store/api").TrimEnd('/');
+        (Environment.GetEnvironmentVariable("ENCY_STORE_API") ?? "https://apps.encycam.com/api").TrimEnd('/');
 
     public string StoreBaseUrl => _apiBase.EndsWith("/api") ? _apiBase[..^4] : _apiBase;
 
