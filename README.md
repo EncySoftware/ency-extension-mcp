@@ -27,6 +27,17 @@ Repos made by hand from the template can be bound the same way:
 ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
 ```
 
+## Where the API itself is documented
+
+The guides this server ships cover the ENCY **entry points** — which interface to implement and how
+to register it. What you call inside them lives elsewhere:
+
+- [CAM API reference](https://docs.encycam.com/CAMAPI/2/en/) — every interface, property and method.
+- [Lessons](https://docs.encycam.com/CAMAPI/2/en/src/Lessons/Main.html) — the same API in order,
+  starting from a first extension.
+- [cam-api-examples](https://github.com/EncySoftware/cam-api-examples) — a worked example of every
+  extension kind, code included.
+
 ## Setup (Cursor)
 
 Prerequisites: .NET 8 SDK, `git`, `gh` (`gh auth login` once).
