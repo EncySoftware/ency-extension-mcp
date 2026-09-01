@@ -90,6 +90,12 @@ product, and an extension built against it is an extension for the old ENCY. If 
 problem, say so instead of switching lines quietly. (An assistant that read the old instructions
 spent an hour writing for ENCY 2 - hence this paragraph.)
 
+**The API reference lives outside this repo:**
+[cam-api-examples/docs](https://github.com/EncySoftware/cam-api-examples/tree/v3/main/docs) - what
+the CAM API can do, with a worked example of every extension kind. The guides below are the short
+path for one kind; that repository is the whole picture, and it is where to look when an interface
+here is not enough.
+
 **Decide which entry point you need BEFORE writing extension code, then read its guide.** Each guide
 gives the exact interface, the ``*.settings.json`` key, a compiling skeleton and the traps. The guides
 are plain markdown under ``.cursor/rules/`` - open them directly. If the ``ency-extension-store`` MCP
