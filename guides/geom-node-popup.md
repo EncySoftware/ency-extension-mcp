@@ -65,6 +65,7 @@ context with the node and the project.
 ## Skeleton
 
 ```csharp
+using CAMAPI.DotnetHelper;
 using CAMAPI.Extensions;
 using CAMAPI.GeometryModelForm;
 using CAMAPI.ResultStatus;
@@ -91,10 +92,30 @@ public class GeomNodePopupExtension : IExtension, IExtensionGeomModelNodePopup
         }
     }
 }
-```
 
-The handler mirrors the operation-popup one: implement the matching `...OnClicked` interface, wrap COM
-objects in `ComWrapper`, catch everything, report through `resultStatus`.
+/// The handler: the same shape as the operation-popup one. Everything from the context is a COM
+/// object — wrap it, call through Invoke, catch everything, report through resultStatus.
+public class ShowNodeFullNameOnClicked : ICamApiGeomModelNodePopupItemOnClicked
+{
+    public void OnItemClicked(IExtensionGeomModelNodePopupItemOnClickedContext context,
+                              out TResultStatus resultStatus)
+    {
+        resultStatus = default;
+        try
+        {
+            using var nodeCom = ComWrapper.Create(context.SelectedNode);
+            if (nodeCom.IsNull) throw new Exception("No node selected");
+            string fullName = nodeCom.Invoke(n => n.FullName);
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "node.txt"), fullName);
+        }
+        catch (Exception e)
+        {
+            resultStatus.Code = TResultStatusCode.rsError;
+            resultStatus.Description = e.Message;
+        }
+    }
+}
+```
 
 ## Gotchas
 
