@@ -33,8 +33,9 @@ Most authors need none of the tools below. The whole route is in the browser, an
 to point somebody at who is not a developer (an assistant that finds `gh` on the machine tends to
 choose the console route instead — that is how a first attempt ended in two red screens on 02.09.2026):
 
-1. [ency-extension-template](https://github.com/EncySoftware/ency-extension-template) → **Use this
-   template**, name the repository after the extension. The first push renames everything inside.
+1. Open the **Use this template** form with the template already chosen:
+   [github.com/new?template_owner=EncySoftware&template_name=ency-extension-template](https://github.com/new?template_owner=EncySoftware&template_name=ency-extension-template) — name the repository after the extension. The
+   first push renames everything inside.
 2. [apps.encycam.com/account](https://apps.encycam.com/account) → **Connect** — once, in the
    browser. No token, nothing goes into GitHub.
 3. Put the code in `src/`, then **Actions → publish-to-ency-store → Run workflow** with the fields

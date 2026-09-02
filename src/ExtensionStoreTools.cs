@@ -49,8 +49,8 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             // Путь без единой команды у нас есть — его и называем первым; консоль остаётся тем, кому нужна.
             return "ERROR: gh CLI is not authenticated, so this tool cannot create the repository.\n" +
                    "No console is needed to publish at all — the browser route:\n" +
-                   "  1. https://github.com/EncySoftware/ency-extension-template -> 'Use this template', " +
-                   "name the repo after the extension (the first push renames everything inside);\n" +
+                   $"  1. https://github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name={name} " +
+                   "— the 'Use this template' form with the name already filled in (the first push renames everything inside);\n" +
                    "  2. https://apps.encycam.com/account -> Connect, once, in the browser (no token, no secret);\n" +
                    "  3. put the code in src/, then Actions -> publish-to-ency-store -> Run workflow.\n" +
                    "To use this tool instead: run `gh auth login` in a terminal and ANSWER ITS QUESTIONS there " +

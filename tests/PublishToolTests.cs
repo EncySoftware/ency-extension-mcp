@@ -178,6 +178,8 @@ public class PublishToolTests
         // Отказ обязан вести к пути без консоли РАНЬШЕ, чем к `gh auth login`: человек без консольной
         // привычки читает первое предложение и идёт по нему (Андрей, 02.09.2026).
         Assert.Contains("Use this template", res);
+        // Не «найди кнопку», а готовая форма с именем: ссылка обязана нести имя расширения.
+        Assert.Contains("github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name=GoodName", res);
         Assert.Contains("Run workflow", res);
         Assert.True(res.IndexOf("Use this template", StringComparison.Ordinal)
                     < res.IndexOf("gh auth login", StringComparison.Ordinal),
