@@ -175,6 +175,13 @@ public class PublishToolTests
         var res = await Tools(proc).CreateExtensionRepo("GoodName",
             targetDir: Path.Combine(Path.GetTempPath(), "mcp-cr-" + Guid.NewGuid().ToString("N")));
         Assert.StartsWith("ERROR", res);
+        // The refusal must offer the console-free path BEFORE `gh auth login`: someone without console
+        // habits reads the first sentence and follows it (live first attempt, 02.09.2026).
+        Assert.Contains("Use this template", res);
+        Assert.Contains("Run workflow", res);
+        Assert.True(res.IndexOf("Use this template", StringComparison.Ordinal)
+                    < res.IndexOf("gh auth login", StringComparison.Ordinal),
+            "the browser path must come before the console one");
         Assert.Contains("gh auth login", res);
     }
 }
