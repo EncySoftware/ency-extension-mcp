@@ -115,10 +115,11 @@ public class MyOperationSolver : IExtension, ICamApiTechOperationSolver
         try
         {
             using var xmlPropCom = ComWrapper.Create(techOperation.XMLProp);
-            var xmlProp = xmlPropCom.Instance ?? throw new Exception("Can't get XML properties");
-            double zStart = xmlProp.Flt["ToolpathParams.ZLayers.ZStart"];
-            double zStep  = xmlProp.Flt["ToolpathParams.ZLayers.ZStep"];
-            int layers    = xmlProp.Int["ToolpathParams.ZLayers.Count"];
+            if (xmlPropCom.IsNull) throw new Exception("Can't get XML properties");
+            // Reads go through Invoke (the apartment-thread switch); .Instance is obsolete.
+            double zStart = xmlPropCom.Invoke(x => x.Flt["ToolpathParams.ZLayers.ZStart"]);
+            double zStep  = xmlPropCom.Invoke(x => x.Flt["ToolpathParams.ZLayers.ZStep"]);
+            int layers    = xmlPropCom.Invoke(x => x.Int["ToolpathParams.ZLayers.Count"]);
 
             cldFormer.AddComment("Go to start point");
             cldFormer.OutStandardFeed((int)TFeedTypeFlag.affRapid);

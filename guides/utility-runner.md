@@ -83,7 +83,7 @@ public class UtilityRunnerExtension : IExtension, IExtensionUtilityRunner
         {
             var button = context.UtilButtonContext;          // which utility is being run
             using var appCom = ComWrapper.Create(context.UtilityContext.CamApplication);
-            var app = appCom.Instance ?? throw new Exception("Application not found");
+            if (appCom.IsNull) throw new Exception("Application not found");
 
             // Pre-processing: gather input, validate, ask the user.
             // Then let the actual work happen (run the target utility / do the wrapped action).

@@ -93,14 +93,16 @@ public class UtilityExtension : IExtension, IExtensionUtility
         try
         {
             using var appCom = ComWrapper.Create(context.CamApplication);
-            var app = appCom.Instance ?? throw new Exception("Application not found");
+            if (appCom.IsNull) throw new Exception("Application not found");
 
             using var projectCom = appCom.GetActiveProject();
             if (projectCom.IsNull)
                 throw new Exception("No active project");
 
             // Your work here. Calls that report through their own status:
-            app.ExportCurrentProject(@"C:\temp\copy.stcp", true, out resultStatus);
+            // Every call on the COM object goes through Invoke - it runs on the thread the object
+            // belongs to. Reading .Instance and calling it directly is obsolete (CS0618).
+            resultStatus = appCom.Invoke(a => { a.ExportCurrentProject(@"C:\temp\copy.stcp", true, out var st); return st; });
             if (resultStatus.Code == TResultStatusCode.rsError)
                 throw new Exception("Export failed: " + resultStatus.Description);
         }
@@ -119,7 +121,8 @@ public class UtilityExtension : IExtension, IExtensionUtility
   (`Code = TResultStatusCode.rsError`, `Description = ...`). An escaping exception crosses the COM
   boundary and takes ENCY with it.
 - **Every COM object goes through `ComWrapper`/`using`.** Raw references keep ENCY objects alive and
-  the extension unloadable. `ComWrapper.Create(...)`, `.Instance`, `.Invoke(...)`, `.IsNull`.
+  the extension unloadable. `ComWrapper.Create(...)`, `.Invoke(...)`, `.InvokeAndWrap(...)`, `.IsNull` - never `.Instance`, it is
+  obsolete (CS0618) because it skips the apartment-thread switch.
 - **Check the status of calls that hand you one.** Many API methods return `out TResultStatus`
   instead of throwing — a silently ignored `rsError` looks like success.
 - **A cancelled dialog is not an error.** If the user closes your folder/file picker, `return` with
