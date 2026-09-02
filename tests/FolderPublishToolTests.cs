@@ -12,11 +12,96 @@ public class FolderPublishToolTests
     private readonly List<TimeSpan> _waited = new();
     private readonly List<string> _log = new();
 
-    private FolderPublishTools Tools(FakeStoreClient store, FakeStoreAuth? auth = null) =>
+    private FolderPublishTools Tools(FakeStoreClient store, FakeStoreAuth? auth = null, Func<Task<byte[]>>? zip = null) =>
         new(store, auth ?? new FakeStoreAuth(),
             url => { _opened.Add(url); return Task.CompletedTask; },
             t => { _waited.Add(t); return Task.CompletedTask; },
-            _log.Add);
+            _log.Add, zip);
+
+    /** The template as GitHub serves it: one wrapping folder, src/ with the placeholder, rules beside it. */
+    private static byte[] TemplateZip()
+    {
+        using var ms = new MemoryStream();
+        using (var z = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            void Put(string path, string text)
+            {
+                using var w = new StreamWriter(z.CreateEntry(path).Open());
+                w.Write(text);
+            }
+            Put("ency-extension-template-main/src/EncyExtension.csproj", "<Project><AssemblyName>EncyExtension</AssemblyName></Project>");
+            Put("ency-extension-template-main/src/package.info.json", "{\n  \"packageId\": \"EncyExtension\",\n  \"category\": \"other\"\n}");
+            Put("ency-extension-template-main/src/EncyExtension.settings.json", "{ \"name\": \"EncyExtension\" }");
+            Put("ency-extension-template-main/src/Extension.cs", "namespace EncyExtension;");
+            Put("ency-extension-template-main/AGENTS.md", "rules");
+            Put("ency-extension-template-main/.mcp.json", "{}");
+            Put("ency-extension-template-main/.cursor/rules/ency-extension.mdc", "rule");
+        }
+        return ms.ToArray();
+    }
+
+    // ── the project from the template ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task MakesTheProjectFromTheTemplateZipRenamedAndWithTheRulesInside()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), "mcp-cf-" + Guid.NewGuid().ToString("N"));
+        var store = new FakeStoreClient();
+        try
+        {
+            var res = await Tools(store, zip: () => Task.FromResult(TemplateZip())).CreateExtensionFolder("PocketMill", parent, "operation");
+            Assert.DoesNotContain("ERROR", res);
+            var target = Path.Combine(parent, "PocketMill");
+            Assert.True(File.Exists(Path.Combine(target, "src", "PocketMill.csproj")), "csproj renamed");
+            Assert.True(File.Exists(Path.Combine(target, "src", "PocketMill.settings.json")), "settings renamed");
+            Assert.Contains("namespace PocketMill;", File.ReadAllText(Path.Combine(target, "src", "Extension.cs")));
+            Assert.Contains("\"packageId\": \"PocketMill\"", File.ReadAllText(Path.Combine(target, "src", "package.info.json")));
+            Assert.Contains("\"category\": \"operation\"", File.ReadAllText(Path.Combine(target, "src", "package.info.json")));
+            Assert.True(File.Exists(Path.Combine(target, "AGENTS.md")) && File.Exists(Path.Combine(target, ".mcp.json")), "rules and MCP registration travel along");
+            Assert.False(Directory.Exists(Path.Combine(parent, "ency-extension-template-main")), "the wrapping folder is gone");
+            Assert.Contains("publish_folder(\"PocketMill\"", res);
+            // and the result is a folder publish_folder accepts as it is
+            var plan = FolderPlanner.Plan(target);
+            Assert.Equal("PocketMill.csproj", plan.Project);
+        }
+        finally { if (Directory.Exists(parent)) Directory.Delete(parent, true); }
+    }
+
+    [Fact]
+    public async Task RefusesToOverwriteAnExistingFolderAndAnUnknownCategory()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), "mcp-cf-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(parent, "Taken"));
+        int fetched = 0;
+        Func<Task<byte[]>> zip = () => { fetched++; return Task.FromResult(TemplateZip()); };
+        try
+        {
+            var taken = await Tools(new FakeStoreClient(), zip: zip).CreateExtensionFolder("Taken", parent);
+            Assert.StartsWith("ERROR", taken);
+            Assert.Contains("already exists", taken);
+            var badCat = await Tools(new FakeStoreClient(), zip: zip).CreateExtensionFolder("Fresh", parent, "nonsense");
+            Assert.StartsWith("ERROR", badCat);
+            Assert.Contains("no category", badCat);
+            Assert.Equal(0, fetched);
+            Assert.False(Directory.Exists(Path.Combine(parent, "Fresh")));
+        }
+        finally { Directory.Delete(parent, true); }
+    }
+
+    [Fact]
+    public async Task WhenTheTemplateCannotBeDownloadedItSaysSoAndNamesTheZip()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), "mcp-cf-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var res = await Tools(new FakeStoreClient(), zip: () => throw new HttpRequestException("no route to host"))
+                .CreateExtensionFolder("Offline", parent);
+            Assert.StartsWith("ERROR", res);
+            Assert.Contains("no route to host", res);
+            Assert.Contains(FolderPublishTools.TemplateZipUrl, res);
+        }
+        finally { if (Directory.Exists(parent)) Directory.Delete(parent, true); }
+    }
 
     /** A project folder like the template's src/: csproj, manifest, settings, code, and junk to skip. */
     private static string ProjectFolder(string name, bool withBuildOutput = true)
