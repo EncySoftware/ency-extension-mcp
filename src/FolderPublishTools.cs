@@ -169,6 +169,7 @@ public class FolderPublishTools
         FolderPlan plan;
         try { plan = FolderPlanner.Plan(Path.GetFullPath(folder ?? ".")); }
         catch (FolderPlanException e) { return "ERROR: " + e.Message; }
+        log($"{name}: {plan.Files.Count} files from {plan.Root} ({plan.Bytes / 1024} KB)");
 
         var sb = new StringBuilder();
         string? token = await TokenOrBrowserLogin(sb);
@@ -204,8 +205,13 @@ public class FolderPublishTools
             try { repo = await store.CreateRepository(name, token); }
             catch (StoreApiException e) { return $"ERROR: the store could not create the repository ({e.Status}): {e.Message}"; }
             sb.AppendLine($"- repository {repo.Repository} created from the template");
+            log($"repository {repo.Repository} created; waiting for GitHub to prepare it");
         }
-        else sb.AppendLine($"- repository {repo.Repository} (already there)");
+        else
+        {
+            sb.AppendLine($"- repository {repo.Repository} (already there)");
+            log($"repository {repo.Repository} already exists");
+        }
 
         // GitHub registers a fresh repository's workflow seconds after creating its files; a run
         // dispatched before that gets 404, and the template's bootstrap commit is still landing.
@@ -222,6 +228,7 @@ public class FolderPublishTools
         string? baseline = (await FindBuild(repo.Repository, token)) is { } before && before.Status != "RUNNING"
             ? before.UpdatedAt : null;
 
+        log($"uploading {plan.Files.Count} files");
         SourcesUploaded up;
         try { up = await store.UploadSources(name, plan.Files, token); }
         catch (StoreApiException e) { return $"ERROR: the store did not take the folder ({e.Status}): {e.Message}"; }
@@ -235,6 +242,7 @@ public class FolderPublishTools
             return sb + $"ERROR: the files are in the repository, but the run did not start ({e.Status}): {e.Message}";
         }
         sb.AppendLine($"- publish run started: {run.ActionsUrl}");
+        log($"committed as {Short(up.CommitSha)}; publish run started, waiting for the build (usually 1-2 minutes)");
 
         if (!waitForResult)
             return sb + "\nThe build is running on GitHub — call publish_folder_status with the same name to follow it.";
@@ -244,10 +252,12 @@ public class FolderPublishTools
         {
             await delay(BuildPollEvery);
             var b = await FindBuild(repo.Repository, token);
+            if (i % 6 == 5) log($"still building - {(i + 1) * (int)BuildPollEvery.TotalSeconds}s");
             if (b == null || b.UpdatedAt == baseline) continue;
             report = b;
             if (b.Status != "RUNNING") break;
         }
+        log(report == null ? "no report from GitHub yet" : $"build {report.Status.ToLowerInvariant()}");
         sb.AppendLine();
         sb.Append(await Describe(name, report, run.ActionsUrl));
         return sb.ToString();

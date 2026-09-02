@@ -115,13 +115,6 @@ publishing** — the run swaps its GitHub OIDC token for a key that lives minute
 credential is stored in this repo either. The policy on nuget.org points at this repo + that workflow;
 the account name comes from the `NUGET_USER` repository variable.
 
-Until the package reaches nuget.org, install it from the `.nupkg` attached to the latest
-[release](https://github.com/EncySoftware/ency-extension-mcp/releases):
-
-```bash
-dotnet tool install -g EncySoftware.ExtensionStoreMcp --add-source <folder with the .nupkg>
-```
-
 Doing it by hand instead of `setup` means `ency-extension-mcp login` plus this in `~/.cursor/mcp.json`:
 
 ```json
