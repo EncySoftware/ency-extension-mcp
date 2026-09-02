@@ -187,6 +187,7 @@ public class FolderPublishTools
         {
             string url = await store.GetAppInstallUrl(token);
             log("The store app needs the author's consent on GitHub, once. Opening " + url);
+            log("Tell the author: on that page choose Only select repositories and leave the list empty - the store then sees only the repositories it creates; GitHub adds each new one to the list itself.");
             await openBrowser(url);
             for (int i = 0; i < InstallPolls && app.Installations.Count == 0; i++)
             {
