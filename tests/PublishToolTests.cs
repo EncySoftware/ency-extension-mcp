@@ -178,6 +178,9 @@ public class PublishToolTests
         // Отказ обязан вести к пути без консоли РАНЬШЕ, чем к `gh auth login`: человек без консольной
         // привычки читает первое предложение и идёт по нему (Андрей, 02.09.2026). Самый короткий путь —
         // страница стора с загрузкой папки: GitHub на этой машине не нужен вовсе, поэтому она первая.
+        Assert.Contains("publish_folder", res);
+        Assert.True(res.IndexOf("publish_folder", StringComparison.Ordinal) < res.IndexOf("apps.encycam.com/publish", StringComparison.Ordinal),
+            "the tool without gh is named before the page");
         Assert.Contains("https://apps.encycam.com/publish", res);
         Assert.Contains("A folder with the extension", res);
         Assert.Contains("Upload and publish", res);
