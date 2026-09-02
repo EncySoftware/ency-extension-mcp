@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO.Compression;
 using System.Text;
 using ModelContextProtocol.Server;
 
@@ -14,16 +15,40 @@ namespace EncyExtensionMcp;
 /// route stalled on `gh auth login`'s Y/n prompt, which swallowed the next pasted command. Nothing
 /// here asks a question in a terminal.</para>
 ///
+/// <para>`create_extension_folder` is the other end of the same idea: the project comes from the
+/// template's public zip, renamed on this machine — no GitHub account is needed to START, only to
+/// publish, and that one is the store's job.</para>
+///
 /// <para>Waits are counted in polls, not in wall-clock time, so a test with an instant delay ends.</para>
 /// </summary>
 [McpServerToolType]
-public class FolderPublishTools(IStoreClient store, IStoreAuth auth, Func<string, Task> openBrowser,
-                                Func<TimeSpan, Task> delay, Action<string> log)
+public class FolderPublishTools
 {
     public static readonly TimeSpan PollEvery = TimeSpan.FromSeconds(3);
     public static readonly TimeSpan BuildPollEvery = TimeSpan.FromSeconds(5);
     /** 5 minutes for the consent page, 2 for GitHub to register a fresh repository's workflow, 15 for the build. */
     public const int InstallPolls = 100, ReadyPolls = 40, BuildPolls = 180;
+    public const string TemplateZipUrl = "https://github.com/EncySoftware/ency-extension-template/archive/refs/heads/main.zip";
+
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(2) };
+
+    private readonly IStoreClient store;
+    private readonly IStoreAuth auth;
+    private readonly Func<string, Task> openBrowser;
+    private readonly Func<TimeSpan, Task> delay;
+    private readonly Action<string> log;
+    private readonly Func<Task<byte[]>> fetchTemplateZip;
+
+    public FolderPublishTools(IStoreClient store, IStoreAuth auth, Func<string, Task> openBrowser,
+                              Func<TimeSpan, Task> delay, Action<string> log, Func<Task<byte[]>>? fetchTemplateZip = null)
+    {
+        this.store = store;
+        this.auth = auth;
+        this.openBrowser = openBrowser;
+        this.delay = delay;
+        this.log = log;
+        this.fetchTemplateZip = fetchTemplateZip ?? (() => Http.GetByteArrayAsync(TemplateZipUrl));
+    }
 
     public static Task OpenUrl(string url)
     {
@@ -37,6 +62,92 @@ public class FolderPublishTools(IStoreClient store, IStoreAuth auth, Func<string
         }
         return Task.CompletedTask;
     }
+
+    // ---------------------------------------------------------------- create_extension_folder
+
+    [McpServerTool(Name = "create_extension_folder"), Description(
+        "Make a new ENCY extension project on this machine from the official template — no GitHub " +
+        "account, no gh, no git: a folder named after the extension with the sample code in src/, the " +
+        "rules for the assistant (AGENTS.md, .cursor/rules) and the MCP registration inside. Use it when " +
+        "the author starts from nothing. Then write the code in src/ (start at Extension.cs), fill " +
+        "src/readme.md and src/package.info.json, and publish_folder(name, thatFolder) publishes it.")]
+    public async Task<string> CreateExtensionFolder(
+        [Description("Extension name in PascalCase, e.g. MyToolpathHelper — also the store name")] string name,
+        [Description("Where to put it: the project lands in <targetDir>/<name>. Default: current directory")] string? targetDir = null,
+        [Description("Store category id for the card, e.g. operation, analyzer. Leave empty for 'other'")] string? category = null)
+    {
+        if (!TemplateRenamer.IsValidName(name))
+            return $"ERROR: '{name}' is not a valid extension name — PascalCase letters/digits/dots, starting with a letter.";
+        var parent = Path.GetFullPath(targetDir ?? ".");
+        var target = Path.Combine(parent, name);
+        if (Directory.Exists(target))
+            return $"ERROR: {target} already exists — pick another name or directory.";
+
+        string? wantedCategory = null;
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            wantedCategory = category.Trim().ToLowerInvariant();
+            var known = await store.GetCategories();
+            if (known.Count > 0 && known.All(k => k.Id != wantedCategory))
+                return $"ERROR: the store has no category '{wantedCategory}'. Known: " + string.Join(", ", known.Select(k => k.Id)) + ".";
+        }
+
+        byte[] zip;
+        try { zip = await fetchTemplateZip(); }
+        catch (Exception e)
+        {
+            return $"ERROR: could not download the template ({e.Message}). Is GitHub reachable? The same zip by hand: {TemplateZipUrl}";
+        }
+
+        var tmp = Path.Combine(Path.GetTempPath(), "ency-tpl-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var ms = new MemoryStream(zip))
+            using (var archive = new ZipArchive(ms, ZipArchiveMode.Read))
+                archive.ExtractToDirectory(tmp);
+            // GitHub wraps the tree in one folder named after the repository and the branch.
+            var root = Directory.GetDirectories(tmp).Length == 1 && Directory.GetFiles(tmp).Length == 0
+                ? Directory.GetDirectories(tmp)[0] : tmp;
+            if (!Directory.Exists(Path.Combine(root, "src")))
+                return "ERROR: the downloaded zip has no src/ — that is not the extension template.";
+            CopyTree(root, target);   // a copy, not a move: temp and target may sit on different drives
+        }
+        catch (Exception e)
+        {
+            return $"ERROR: could not unpack the template: {e.Message}";
+        }
+        finally
+        {
+            try { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); } catch { /* temp only */ }
+        }
+
+        int touched = TemplateRenamer.Rename(target, name);
+        string categoryNote = "";
+        if (wantedCategory != null)
+        {
+            PackageInfo.SetCategory(target, wantedCategory);
+            categoryNote = $", category {wantedCategory}";
+        }
+        return $"""
+            Created {target} from the ENCY extension template ({touched} files renamed to {name}{categoryNote}).
+
+            - write the code in src/ (start at src/Extension.cs; keep the id in src/{name}.settings.json in sync with ExtensionFactory)
+            - fill src/readme.md (the store card) and description/author in src/package.info.json
+            - AGENTS.md and .cursor/rules/ explain the API and the rules; .mcp.json registers this MCP server for the editor
+            - publish with publish_folder("{name}", "{target}") — no git, no gh; the author only signs in and approves the store app in the browser
+            """;
+    }
+
+    private static void CopyTree(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var dir in Directory.GetDirectories(from, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, dir)));
+        foreach (var file in Directory.GetFiles(from, "*", SearchOption.AllDirectories))
+            File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
+    }
+
+    // ---------------------------------------------------------------- publish_folder
 
     [McpServerTool(Name = "publish_folder"), Description(
         "Publish an ENCY extension from a local folder with NO git and NO gh on this machine — the " +

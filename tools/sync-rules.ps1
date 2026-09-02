@@ -127,6 +127,10 @@ Two guides apply to every change:
 
 ## Publishing
 
+**Starting from nothing?** ``create_extension_folder(name, dir)`` from the same MCP server makes
+the project from the template on this machine - no GitHub account, no git; write the code in its
+``src/``, then publish it as below.
+
 **Preferred: ``publish_folder(name, folder)`` from the ``ency-extension-store`` MCP server** - no git,
 no gh. The store creates the repository in the author's GitHub account, commits this folder into
 ``src/``, runs the build and returns the result: the version and the card link, or the failing step

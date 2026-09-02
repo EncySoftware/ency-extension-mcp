@@ -5,6 +5,9 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 
 | Tool | What it does |
 |---|---|
+| `create_extension_folder` | The project from the template on this machine, renamed — no GitHub account, no git. Start here. |
+| `publish_folder` | Publishes a local folder with no git and no gh: the store makes the repository, commits the folder, builds and publishes; the author only signs in and approves the store app in the browser. |
+| `publish_folder_status` | The latest publish_folder result: building, published (version + card), or failed (step + log). |
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
 | `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
@@ -26,6 +29,12 @@ Repos made by hand from the template can be bound the same way:
 ```bash
 ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
 ```
+
+## Start from nothing — no GitHub account
+
+`create_extension_folder(name, dir)` (or `ency-extension-mcp create-folder <Name> [dir]`) makes the
+project from the template on this machine: the public zip, unpacked and renamed, with the rules for
+the assistant and the MCP registration inside. Nothing on GitHub is touched until `publish_folder`.
 
 ## Publish from a folder — no git, no gh
 

@@ -32,6 +32,20 @@ if (args.Length > 0 && args[0].Equals("setup", StringComparison.OrdinalIgnoreCas
         args.Contains("--no-login", StringComparer.OrdinalIgnoreCase), Console.WriteLine);
 }
 
+// `ency-extension-mcp create-folder <Name> [dir] [--category <id>]` — the project from the template, on
+// this machine, renamed; no GitHub account needed to start.
+if (args.Length > 1 && args[0].Equals("create-folder", StringComparison.OrdinalIgnoreCase))
+{
+    var tools = new FolderPublishTools(new StoreClient(), new StoreTokenProvider(), FolderPublishTools.OpenUrl, Task.Delay,
+        Console.Error.WriteLine);
+    int catAt = Array.FindIndex(args, a => a.Equals("--category", StringComparison.OrdinalIgnoreCase));
+    string? cat = catAt > 0 && catAt + 1 < args.Length ? args[catAt + 1] : null;
+    string? dir = args.Skip(2).Where((a, i) => !a.StartsWith("--") && (catAt < 0 || i + 2 != catAt + 1)).FirstOrDefault();
+    string result = await tools.CreateExtensionFolder(args[1], dir, cat);
+    Console.WriteLine(result);
+    return result.StartsWith("ERROR") ? 1 : 0;
+}
+
 // `ency-extension-mcp publish-folder <Name> [folder] [--no-wait]` — the same route as the MCP tool
 // publish_folder, for a terminal or a script: no git, no gh, the store does the GitHub work.
 if (args.Length > 1 && args[0].Equals("publish-folder", StringComparison.OrdinalIgnoreCase))
