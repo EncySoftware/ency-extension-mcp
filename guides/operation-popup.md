@@ -72,6 +72,7 @@ you captured during `Build`.
 ## Skeleton
 
 ```csharp
+using CAMAPI.DotnetHelper;
 using CAMAPI.Extensions;
 using CAMAPI.ResultStatus;
 using CAMAPI.TechnologyForm;

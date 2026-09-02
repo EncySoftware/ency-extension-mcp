@@ -84,17 +84,16 @@ This repo is one extension for **ENCY 3**. GitHub Actions builds it and the ENCY
 packs and publishes it when you push a version tag.
 
 **Write for ENCY 3, not ENCY 2.** The SDK is pinned in ``src/EncyExtension.csproj`` as
-``EncySoftware.CAMAPI.Sdk.Net`` 3.0.1-rc.22 - a release candidate, because that is the only 3.x
-published so far. Do not "fix" that by moving to a 2.x version: 2.x is the previous generation of the
-product, and an extension built against it is an extension for the old ENCY. If the pinned rc is a
-problem, say so instead of switching lines quietly. (An assistant that read the old instructions
-spent an hour writing for ENCY 2 - hence this paragraph.)
+``EncySoftware.CAMAPI.Sdk.Net`` 3.0.8 - the 3.x line; a newer 3.x on the public feed is fine to
+move to. Do not "fix" anything by moving to a 2.x version: 2.x is the previous generation of the
+product, and an extension built against it is an extension for the old ENCY. (An assistant that read
+the old instructions spent an hour writing for ENCY 2 - hence this paragraph.)
 
 **The API reference lives outside this repo.** Three places, three different questions:
 
-- [CAM API reference](https://docs.encycam.com/CAMAPI/2/en/) - every interface, property and method.
+- [CAM API reference](https://docs.encycam.com/CAMAPI/3/en/) - every interface, property and method.
   Go here to answer "what can I actually call".
-- [Lessons](https://docs.encycam.com/CAMAPI/2/en/src/Lessons/Main.html) - the same API taught in
+- [Lessons](https://docs.encycam.com/CAMAPI/3/en/src/Lessons/Main.html) - the same API taught in
   order, starting from a first extension. Go here when the reference tells you what exists but not
   where to begin.
 - [cam-api-examples/docs](https://github.com/EncySoftware/cam-api-examples/tree/v3/main/docs) - a

@@ -101,8 +101,9 @@ public class UtilityExtension : IExtension, IExtensionUtility
 
             // Your work here. Calls that report through their own status:
             // Every call on the COM object goes through Invoke - it runs on the thread the object
-            // belongs to. Reading .Instance and calling it directly is obsolete (CS0618).
-            resultStatus = appCom.Invoke(a => { a.ExportCurrentProject(@"C:\temp\copy.stcp", true, out var st); return st; });
+            // belongs to. Reading .Instance and calling it directly is obsolete (CS0618). The overload
+            // that receives a TResultStatus throws on rsError, and the catch below reports it.
+            appCom.Invoke(a => { a.ExportCurrentProject(@"C:\temp\copy.stcp", true, out var st); return st; });
             if (resultStatus.Code == TResultStatusCode.rsError)
                 throw new Exception("Export failed: " + resultStatus.Description);
         }
