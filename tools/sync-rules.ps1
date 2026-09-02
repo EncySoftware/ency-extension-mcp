@@ -127,13 +127,20 @@ Two guides apply to every change:
 
 ## Publishing
 
-**The author is not at ease with a terminal, or ``gh`` is not logged in on this machine? Do not run
-``gh auth login`` for them** - it stops on a Y/n prompt that swallows the next pasted command. Send
-them to the store page instead: https://apps.encycam.com/publish -> **A folder with the extension** ->
-pick this project's folder -> **Upload and publish**. The store creates the repository, commits the
-folder, runs the build and shows the result on that page; the next version is the same button.
+**Preferred: ``publish_folder(name, folder)`` from the ``ency-extension-store`` MCP server** - no git,
+no gh. The store creates the repository in the author's GitHub account, commits this folder into
+``src/``, runs the build and returns the result: the version and the card link, or the failing step
+with its log (fix the code, call it again). The author is needed twice, in the browser only - the
+store sign-in and, once, the app's consent page - and the tool opens both itself. Server not
+connected? Install it once, no questions asked: ``dotnet tool install -g EncySoftware.ExtensionStoreMcp``,
+then restart the editor - this repository carries ``.mcp.json`` and ``.cursor/mcp.json`` that register
+it. The same route from a terminal: ``ency-extension-mcp publish-folder <Name> <folder>``.
 
-From a terminal, a version tag does the same:
+**Never run ``gh auth login`` for the author** - it stops on a Y/n prompt that swallows the next
+pasted command. Without the tool, the same route is the store page: https://apps.encycam.com/publish
+-> **Code in a folder** -> pick this project's folder -> **Upload and publish**.
+
+From a terminal where git and gh are already set up, a version tag does the same:
 
 ``````bash
 git tag v1.2.3 && git push --tags

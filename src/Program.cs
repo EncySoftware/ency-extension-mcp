@@ -32,6 +32,20 @@ if (args.Length > 0 && args[0].Equals("setup", StringComparison.OrdinalIgnoreCas
         args.Contains("--no-login", StringComparer.OrdinalIgnoreCase), Console.WriteLine);
 }
 
+// `ency-extension-mcp publish-folder <Name> [folder] [--no-wait]` — the same route as the MCP tool
+// publish_folder, for a terminal or a script: no git, no gh, the store does the GitHub work.
+if (args.Length > 1 && args[0].Equals("publish-folder", StringComparison.OrdinalIgnoreCase))
+{
+    var tokenProvider = new StoreTokenProvider();
+    var tools = new FolderPublishTools(new StoreClient(), tokenProvider, FolderPublishTools.OpenUrl, Task.Delay,
+        Console.Error.WriteLine);
+    string? folderArg = args.Skip(2).FirstOrDefault(a => !a.StartsWith("--"));
+    bool wait = !args.Contains("--no-wait", StringComparer.OrdinalIgnoreCase);
+    string result = await tools.PublishFolder(args[1], folderArg, wait);
+    Console.WriteLine(result);
+    return result.StartsWith("ERROR") ? 1 : 0;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // stdout carries the MCP protocol — all logging must go to stderr.
@@ -40,13 +54,20 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
 builder.Services.AddSingleton<IStoreClient, StoreClient>();
 builder.Services.AddSingleton<StoreTokenProvider>();
+builder.Services.AddSingleton<IStoreAuth>(sp => sp.GetRequiredService<StoreTokenProvider>());
 builder.Services.AddSingleton<ExtensionStoreTools>();
+// The folder route talks to the browser and waits between polls; both are handed in so a test can
+// replace them, and every word goes to stderr — stdout is the MCP protocol.
+builder.Services.AddSingleton(sp => new FolderPublishTools(
+    sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(),
+    FolderPublishTools.OpenUrl, Task.Delay, s => Console.Error.WriteLine(s)));
 builder.Services.AddSingleton<GuideTools>();
 
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
     .WithTools<ExtensionStoreTools>()
+    .WithTools<FolderPublishTools>()
     .WithTools<GuideTools>();
 
 await builder.Build().RunAsync();

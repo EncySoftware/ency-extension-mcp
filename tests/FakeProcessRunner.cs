@@ -47,4 +47,62 @@ public class FakeStoreClient : IStoreClient
         Claims.Add((packageId, repository));
         return Task.FromResult(ClaimFailure);
     }
+
+    // ---- the GitHub App route, scripted: queues answer in order, then the default holds
+    public AppStatus AppStatusDefault { get; set; } = new(true, new List<string> { "andrew-l" }, new List<AppRepo>());
+    public Queue<AppStatus> AppStatuses { get; } = new();
+    public string InstallUrl { get; set; } = "https://github.com/apps/ency-extension-store/installations/new?state=s";
+    public int InstallUrlAsked { get; private set; }
+    public string? CreateRepoFailure { get; set; }
+    public List<string> CreatedRepos { get; } = new();
+    public RepoState RepoStateDefault { get; set; } = new("ready", false, "main");
+    public Queue<RepoState> RepoStates { get; } = new();
+    public string? UploadFailure { get; set; }
+    public List<(string PackageId, IReadOnlyList<SourceFile> Files)> Uploads { get; } = new();
+    public string? RunFailure { get; set; }
+    public List<string> Runs { get; } = new();
+    public IReadOnlyList<BuildReport> BuildsDefault { get; set; } = Array.Empty<BuildReport>();
+    public Queue<IReadOnlyList<BuildReport>> Builds { get; } = new();
+
+    public Task<AppStatus> GetAppStatus(string accessToken) =>
+        Task.FromResult(AppStatuses.Count > 0 ? AppStatuses.Dequeue() : AppStatusDefault);
+    public Task<string> GetAppInstallUrl(string accessToken) { InstallUrlAsked++; return Task.FromResult(InstallUrl); }
+    public Task<AppRepo> CreateRepository(string packageId, string accessToken)
+    {
+        if (CreateRepoFailure != null) throw new StoreApiException(409, CreateRepoFailure);
+        CreatedRepos.Add(packageId);
+        return Task.FromResult(new AppRepo(packageId, "andrew-l/" + packageId, "https://github.com/andrew-l/" + packageId));
+    }
+    public Task<RepoState> GetRepoState(string packageId, string accessToken) =>
+        Task.FromResult(RepoStates.Count > 0 ? RepoStates.Dequeue() : RepoStateDefault);
+    public Task<SourcesUploaded> UploadSources(string packageId, IReadOnlyList<SourceFile> files, string accessToken)
+    {
+        if (UploadFailure != null) throw new StoreApiException(400, UploadFailure);
+        Uploads.Add((packageId, files));
+        return Task.FromResult(new SourcesUploaded("andrew-l/" + packageId, "c0ffee1234567",
+            "https://github.com/andrew-l/" + packageId + "/commit/c0ffee1234567", files.Count));
+    }
+    public Task<RunStarted> StartRun(string packageId, string accessToken)
+    {
+        if (RunFailure != null) throw new StoreApiException(502, RunFailure);
+        Runs.Add(packageId);
+        return Task.FromResult(new RunStarted("andrew-l/" + packageId, "https://github.com/andrew-l/" + packageId + "/actions"));
+    }
+    public Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken) =>
+        Task.FromResult(Builds.Count > 0 ? Builds.Dequeue() : BuildsDefault);
+}
+
+/** Sign-in as a test sees it: a token or none, and a browser login that either works or does not. */
+public class FakeStoreAuth : IStoreAuth
+{
+    public string? Token { get; set; } = "tok";
+    public bool LoginSucceeds { get; set; } = true;
+    public int LoginCalls { get; private set; }
+    public Task<string?> GetAccessToken() => Task.FromResult(Token);
+    public Task<bool> LoginBrowser(Action<string> log)
+    {
+        LoginCalls++;
+        if (LoginSucceeds) Token = "tok-after-login";
+        return Task.FromResult(LoginSucceeds);
+    }
 }

@@ -8,7 +8,15 @@ namespace EncyExtensionMcp;
 /// afterwards fresh access tokens are minted on demand. The ENCY_STORE_TOKEN env var, when
 /// set, overrides everything (CI/debug escape hatch).
 /// </summary>
-public class StoreTokenProvider
+/** What the tools need from the sign-in: a token, and a way to get one without touching stdout. */
+public interface IStoreAuth
+{
+    Task<string?> GetAccessToken();
+    /** Browser sign-in that writes only through `log` — inside the MCP server stdout is the protocol. */
+    Task<bool> LoginBrowser(Action<string> log);
+}
+
+public class StoreTokenProvider : IStoreAuth
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
@@ -84,12 +92,18 @@ public class StoreTokenProvider
      */
     public async Task<int> LoginBrowser()
     {
-        string? refresh = await BrowserLogin.SignIn(_tokenEndpoint, _browserClientId,
-            OpenInBrowser, Console.Error.WriteLine, Http);
-        if (refresh == null) return 1;
-        SaveRefreshToken(refresh, _browserClientId);
+        if (!await LoginBrowser(Console.Error.WriteLine)) return 1;
         Console.WriteLine("Signed in. Tokens are minted automatically from now on (stored: " + AuthFilePath + ").");
         return 0;
+    }
+
+    public async Task<bool> LoginBrowser(Action<string> log)
+    {
+        string? refresh = await BrowserLogin.SignIn(_tokenEndpoint, _browserClientId, OpenInBrowser, log, Http);
+        if (refresh == null) return false;
+        SaveRefreshToken(refresh, _browserClientId);
+        _cachedAccess = null;   // the next GetAccessToken mints from the fresh refresh token
+        return true;
     }
 
     private static Task OpenInBrowser(string url)

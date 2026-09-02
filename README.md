@@ -27,11 +27,23 @@ Repos made by hand from the template can be bound the same way:
 ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
 ```
 
+## Publish from a folder — no git, no gh
+
+`publish_folder(name, folder)` is the tool an assistant should reach for, and
+`ency-extension-mcp publish-folder <Name> <folder>` is the same route from a terminal. The store
+does the GitHub work through its GitHub App: creates the repository in the author's account,
+commits the folder into `src/`, runs the build and reports back — the version and the card link, or
+the failing step with its log. The author is needed twice, in the browser only: the store sign-in
+and, once, the app's consent page; the tool opens both and waits, and nothing is asked in a
+terminal. The next version is the same call. Repositories made from the template carry
+`.mcp.json` and `.cursor/mcp.json`, so Claude Code and Cursor see the server as soon as the tool is
+installed (`dotnet tool install -g EncySoftware.ExtensionStoreMcp`).
+
 ## Publishing without a console
 
-Most authors need none of the tools below, and somebody who is not a developer should be pointed
-at the store page, not at `gh` (an assistant that finds `gh` on the machine tends to choose the
-console route — that is how a first attempt ended in two red screens on 02.09.2026):
+Without the tool, the same route is the store page — and somebody who is not a developer should be
+pointed there, not at `gh` (an assistant that finds `gh` on the machine tends to choose the console
+route — that is how a first attempt ended in two red screens on 02.09.2026):
 
 1. Open [apps.encycam.com/publish](https://apps.encycam.com/publish) → **A folder with the
    extension**. Install the store app on GitHub once (a consent page) and name the extension.

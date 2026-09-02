@@ -23,10 +23,10 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         "Create a new ENCY extension repository from the official template: makes a GitHub repo, " +
         "waits for the template copy, clones it locally, renames the extension, sets the store " +
         "publish secret and pushes. After this the author just writes code and calls publish_extension. " +
-        "This is the CONSOLE route and needs `gh` signed in. The route with no console at all — for " +
-        "somebody who is not a developer — is the browser: GitHub 'Use this template' on " +
-        "EncySoftware/ency-extension-template, then Connect in the store profile, then " +
-        "Actions -> publish-to-ency-store -> Run workflow. Prefer that unless scripting is the point.")]
+        "This is the CONSOLE route and needs `gh` signed in. Prefer publish_folder: it needs no gh and " +
+        "no git — the store creates the repository and publishes the folder, the author only signs in " +
+        "and approves the store app in the browser. Use this tool only when the author wants a local " +
+        "clone and a gh login is already in place.")]
     public async Task<string> CreateExtensionRepo(
         [Description("Extension name in PascalCase, e.g. MyToolpathHelper (also becomes the packageId)")] string name,
         [Description("Directory to clone into (the repo lands in <targetDir>/<name>). Default: current directory")] string? targetDir = null,
@@ -49,7 +49,9 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             // First comes the path that needs no GitHub on this machine at all: the store page takes the folder
             // and does the rest. The GitHub form is second, the console for those who want it.
             return "ERROR: gh CLI is not authenticated, so this tool cannot create the repository.\n" +
-                   "No console and no GitHub login on this machine are needed to publish — the store does it:\n" +
+                   "Use publish_folder instead — it needs neither gh nor git: the store creates the repository, " +
+                   "takes the folder and publishes; the author only signs in and approves the store app in the browser.\n" +
+                   "The same route by hand, in the browser:\n" +
                    "  1. open https://apps.encycam.com/publish and pick 'A folder with the extension';\n" +
                    "  2. install the store app on GitHub once (a consent page) and name the extension;\n" +
                    "  3. choose the project folder (the one holding <Name>.csproj, package.info.json and <Name>.settings.json) " +
