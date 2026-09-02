@@ -103,6 +103,11 @@ spent an hour writing for ENCY 2 - hence this paragraph.)
 The guides below are the short path for ONE kind; those three are the whole picture, and they are
 where to look when an interface here is not enough.
 
+**If you write a PowerShell script for the author, run it as**
+``powershell -ExecutionPolicy Bypass -NoProfile -File <script.ps1>``. A client Windows blocks ``.ps1``
+by default ("running scripts is disabled on this system"), and a first-time author cannot tell that
+error from a broken script. Prefer no script at all: publishing here needs none.
+
 **Decide which entry point you need BEFORE writing extension code, then read its guide.** Each guide
 gives the exact interface, the ``*.settings.json`` key, a compiling skeleton and the traps. The guides
 are plain markdown under ``.cursor/rules/`` - open them directly. If the ``ency-extension-store`` MCP

@@ -178,6 +178,8 @@ public class PublishToolTests
         // The refusal must offer the console-free path BEFORE `gh auth login`: someone without console
         // habits reads the first sentence and follows it (live first attempt, 02.09.2026).
         Assert.Contains("Use this template", res);
+        // Not "find the button" but a form already filled in: the link must carry the name.
+        Assert.Contains("github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name=GoodName", res);
         Assert.Contains("Run workflow", res);
         Assert.True(res.IndexOf("Use this template", StringComparison.Ordinal)
                     < res.IndexOf("gh auth login", StringComparison.Ordinal),
