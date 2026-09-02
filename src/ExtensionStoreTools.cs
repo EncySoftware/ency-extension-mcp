@@ -46,13 +46,19 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         if (!who.Ok)
             // Not "go to the console" but a route out: for someone without console habits `gh auth login`
             // ends in a prompt that swallows whatever is pasted next (caught on a live first attempt, 02.09.2026).
-            // There is a path with no commands at all, so that one is named first; the console stays for those who want it.
+            // First comes the path that needs no GitHub on this machine at all: the store page takes the folder
+            // and does the rest. The GitHub form is second, the console for those who want it.
             return "ERROR: gh CLI is not authenticated, so this tool cannot create the repository.\n" +
-                   "No console is needed to publish at all — the browser route:\n" +
-                   $"  1. https://github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name={name} " +
-                   "— the 'Use this template' form with the name already filled in (the first push renames everything inside);\n" +
-                   "  2. https://apps.encycam.com/account -> Connect, once, in the browser (no token, no secret);\n" +
-                   "  3. put the code in src/, then Actions -> publish-to-ency-store -> Run workflow.\n" +
+                   "No console and no GitHub login on this machine are needed to publish — the store does it:\n" +
+                   "  1. open https://apps.encycam.com/publish and pick 'A folder with the extension';\n" +
+                   "  2. install the store app on GitHub once (a consent page) and name the extension;\n" +
+                   "  3. choose the project folder (the one holding <Name>.csproj, package.info.json and <Name>.settings.json) " +
+                   "and press 'Upload and publish' — the store creates the repository, commits the folder, runs the build " +
+                   "and shows the result on the same page.\n" +
+                   "Prefer GitHub by hand? The 'Use this template' form with the name filled in: " +
+                   $"https://github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name={name} " +
+                   "(the first push renames everything inside), then https://apps.encycam.com/account -> Connect once, " +
+                   "put the code in src/, Actions -> publish-to-ency-store -> Run workflow.\n" +
                    "To use this tool instead: run `gh auth login` in a terminal and ANSWER ITS QUESTIONS there " +
                    "(it waits on a Y/n prompt; anything pasted meanwhile is taken as the answer), then retry.\n" +
                    who.StdErr.Trim();

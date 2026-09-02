@@ -29,17 +29,24 @@ ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
 
 ## Publishing without a console
 
-Most authors need none of the tools below. The whole route is in the browser, and it is the one
-to point somebody at who is not a developer (an assistant that finds `gh` on the machine tends to
-choose the console route instead — that is how a first attempt ended in two red screens on 02.09.2026):
+Most authors need none of the tools below, and somebody who is not a developer should be pointed
+at the store page, not at `gh` (an assistant that finds `gh` on the machine tends to choose the
+console route — that is how a first attempt ended in two red screens on 02.09.2026):
 
-1. Open the **Use this template** form with the template already chosen:
-   [github.com/new?template_owner=EncySoftware&template_name=ency-extension-template](https://github.com/new?template_owner=EncySoftware&template_name=ency-extension-template) — name the repository after the extension. The
-   first push renames everything inside.
-2. [apps.encycam.com/account](https://apps.encycam.com/account) → **Connect** — once, in the
-   browser. No token, nothing goes into GitHub.
-3. Put the code in `src/`, then **Actions → publish-to-ency-store → Run workflow** with the fields
-   empty. Version, tag, build, publish — all on their own.
+1. Open [apps.encycam.com/publish](https://apps.encycam.com/publish) → **A folder with the
+   extension**. Install the store app on GitHub once (a consent page) and name the extension.
+2. Choose the project folder — the one holding `<Name>.csproj`, `package.info.json` and
+   `<Name>.settings.json` — and press **Upload and publish**. The store creates the repository in
+   the author's GitHub account, commits the folder, runs the build and shows the result on the same
+   page. The next version is the same button. No code yet? The same page can publish the template
+   sample as a trial.
+
+Prefer GitHub by hand? Open the **Use this template** form with the template already chosen:
+[github.com/new?template_owner=EncySoftware&template_name=ency-extension-template](https://github.com/new?template_owner=EncySoftware&template_name=ency-extension-template) — name the
+repository after the extension (the first push renames everything inside);
+[apps.encycam.com/account](https://apps.encycam.com/account) → **Connect** once, in the browser;
+put the code in `src/`, then **Actions → publish-to-ency-store → Run workflow** with the fields
+empty. Version, tag, build, publish — all on their own.
 
 **Already have a project that was not made from the template?** Keep it. The template README
 has the exact list of what to bring over (the `src/` layout, the `PackReady` target, the workflow);

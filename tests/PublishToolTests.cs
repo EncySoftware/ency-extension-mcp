@@ -176,14 +176,20 @@ public class PublishToolTests
             targetDir: Path.Combine(Path.GetTempPath(), "mcp-cr-" + Guid.NewGuid().ToString("N")));
         Assert.StartsWith("ERROR", res);
         // The refusal must offer the console-free path BEFORE `gh auth login`: someone without console
-        // habits reads the first sentence and follows it (live first attempt, 02.09.2026).
+        // habits reads the first sentence and follows it (live first attempt, 02.09.2026). The shortest path
+        // is the store page with a folder upload: it needs no GitHub on this machine, so it goes first.
+        Assert.Contains("https://apps.encycam.com/publish", res);
+        Assert.Contains("A folder with the extension", res);
+        Assert.Contains("Upload and publish", res);
         Assert.Contains("Use this template", res);
         // Not "find the button" but a form already filled in: the link must carry the name.
         Assert.Contains("github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name=GoodName", res);
         Assert.Contains("Run workflow", res);
-        Assert.True(res.IndexOf("Use this template", StringComparison.Ordinal)
-                    < res.IndexOf("gh auth login", StringComparison.Ordinal),
-            "the browser path must come before the console one");
+        int store = res.IndexOf("apps.encycam.com/publish", StringComparison.Ordinal);
+        int form = res.IndexOf("Use this template", StringComparison.Ordinal);
+        int console = res.IndexOf("gh auth login", StringComparison.Ordinal);
+        Assert.True(store < form && form < console,
+            "order: the store page, then the GitHub form, the console last");
         Assert.Contains("gh auth login", res);
     }
 }

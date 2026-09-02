@@ -127,6 +127,14 @@ Two guides apply to every change:
 
 ## Publishing
 
+**The author is not at ease with a terminal, or ``gh`` is not logged in on this machine? Do not run
+``gh auth login`` for them** - it stops on a Y/n prompt that swallows the next pasted command. Send
+them to the store page instead: https://apps.encycam.com/publish -> **A folder with the extension** ->
+pick this project's folder -> **Upload and publish**. The store creates the repository, commits the
+folder, runs the build and shows the result on that page; the next version is the same button.
+
+From a terminal, a version tag does the same:
+
 ``````bash
 git tag v1.2.3 && git push --tags
 ``````
