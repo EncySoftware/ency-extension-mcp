@@ -27,6 +27,33 @@ Repos made by hand from the template can be bound the same way:
 ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
 ```
 
+## Publishing without a console
+
+Most authors need none of the tools below. The whole route is in the browser, and it is the one
+to point somebody at who is not a developer (an assistant that finds `gh` on the machine tends to
+choose the console route instead — that is how a first attempt ended in two red screens on 02.09.2026):
+
+1. [ency-extension-template](https://github.com/EncySoftware/ency-extension-template) → **Use this
+   template**, name the repository after the extension. The first push renames everything inside.
+2. [apps.encycam.com/account](https://apps.encycam.com/account) → **Connect** — once, in the
+   browser. No token, nothing goes into GitHub.
+3. Put the code in `src/`, then **Actions → publish-to-ency-store → Run workflow** with the fields
+   empty. Version, tag, build, publish — all on their own.
+
+**Already have a project that was not made from the template?** Keep it. The template README
+has the exact list of what to bring over (the `src/` layout, the `PackReady` target, the workflow);
+then connect the repository to the name — in the browser, or with
+
+```bash
+ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
+```
+
+— and use the same Run workflow.
+
+The tools below are the **console** route: they script the same steps and need `gh` signed in.
+Reach for them when scripting is the point — creating many repositories, driving it from Cursor —
+not as the default.
+
 ## Where the API itself is documented
 
 The guides this server ships cover the ENCY **entry points** — which interface to implement and how

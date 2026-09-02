@@ -22,7 +22,11 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
     [McpServerTool(Name = "create_extension_repo"), Description(
         "Create a new ENCY extension repository from the official template: makes a GitHub repo, " +
         "waits for the template copy, clones it locally, renames the extension, sets the store " +
-        "publish secret and pushes. After this the author just writes code and calls publish_extension.")]
+        "publish secret and pushes. After this the author just writes code and calls publish_extension. " +
+        "This is the CONSOLE route and needs `gh` signed in. The route with no console at all — for " +
+        "somebody who is not a developer — is the browser: GitHub 'Use this template' on " +
+        "EncySoftware/ency-extension-template, then Connect in the store profile, then " +
+        "Actions -> publish-to-ency-store -> Run workflow. Prefer that unless scripting is the point.")]
     public async Task<string> CreateExtensionRepo(
         [Description("Extension name in PascalCase, e.g. MyToolpathHelper (also becomes the packageId)")] string name,
         [Description("Directory to clone into (the repo lands in <targetDir>/<name>). Default: current directory")] string? targetDir = null,
@@ -40,7 +44,18 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         // whoami: nice error early when gh is not logged in
         var who = await proc.Run("gh", "api user --jq .login");
         if (!who.Ok)
-            return "ERROR: gh CLI is not authenticated. Run `gh auth login` first.\n" + who.StdErr.Trim();
+            // Не «иди в консоль», а дорога: у человека без консольной привычки `gh auth login` кончается
+            // диалогом, в который улетает следующая вставленная команда (поймано 02.09.2026 на Андрее).
+            // Путь без единой команды у нас есть — его и называем первым; консоль остаётся тем, кому нужна.
+            return "ERROR: gh CLI is not authenticated, so this tool cannot create the repository.\n" +
+                   "No console is needed to publish at all — the browser route:\n" +
+                   "  1. https://github.com/EncySoftware/ency-extension-template -> 'Use this template', " +
+                   "name the repo after the extension (the first push renames everything inside);\n" +
+                   "  2. https://apps.encycam.com/account -> Connect, once, in the browser (no token, no secret);\n" +
+                   "  3. put the code in src/, then Actions -> publish-to-ency-store -> Run workflow.\n" +
+                   "To use this tool instead: run `gh auth login` in a terminal and ANSWER ITS QUESTIONS there " +
+                   "(it waits on a Y/n prompt; anything pasted meanwhile is taken as the answer), then retry.\n" +
+                   who.StdErr.Trim();
         var owner = string.IsNullOrWhiteSpace(org) ? who.StdOut.Trim() : org.Trim();
         var full = $"{owner}/{name}";
 

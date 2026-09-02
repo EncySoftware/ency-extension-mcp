@@ -175,6 +175,13 @@ public class PublishToolTests
         var res = await Tools(proc).CreateExtensionRepo("GoodName",
             targetDir: Path.Combine(Path.GetTempPath(), "mcp-cr-" + Guid.NewGuid().ToString("N")));
         Assert.StartsWith("ERROR", res);
+        // Отказ обязан вести к пути без консоли РАНЬШЕ, чем к `gh auth login`: человек без консольной
+        // привычки читает первое предложение и идёт по нему (Андрей, 02.09.2026).
+        Assert.Contains("Use this template", res);
+        Assert.Contains("Run workflow", res);
+        Assert.True(res.IndexOf("Use this template", StringComparison.Ordinal)
+                    < res.IndexOf("gh auth login", StringComparison.Ordinal),
+            "путь через браузер должен стоять раньше консольного");
         Assert.Contains("gh auth login", res);
     }
 }
