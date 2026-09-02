@@ -133,7 +133,7 @@ no gh. The store creates the repository in the author's GitHub account, commits 
 with its log (fix the code, call it again). The author is needed twice, in the browser only - the
 store sign-in and, once, the app's consent page - and the tool opens both itself. Server not
 connected? Install it once, no questions asked: ``dotnet tool install -g EncySoftware.ExtensionStoreMcp``,
-then restart the editor - this repository carries ``.mcp.json`` and ``.cursor/mcp.json`` that register
+then register it in this folder with ``ency-extension-mcp setup`` and ask the author to restart the editor. Run both commands yourself - they ask nothing - rather than handing them to the author; restart the editor - this repository carries ``.mcp.json`` and ``.cursor/mcp.json`` that register
 it. The same route from a terminal: ``ency-extension-mcp publish-folder <Name> <folder>``.
 
 **Never run ``gh auth login`` for the author** - it stops on a Y/n prompt that swallows the next
