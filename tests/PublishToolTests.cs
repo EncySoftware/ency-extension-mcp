@@ -176,14 +176,20 @@ public class PublishToolTests
             targetDir: Path.Combine(Path.GetTempPath(), "mcp-cr-" + Guid.NewGuid().ToString("N")));
         Assert.StartsWith("ERROR", res);
         // Отказ обязан вести к пути без консоли РАНЬШЕ, чем к `gh auth login`: человек без консольной
-        // привычки читает первое предложение и идёт по нему (Андрей, 02.09.2026).
+        // привычки читает первое предложение и идёт по нему (Андрей, 02.09.2026). Самый короткий путь —
+        // страница стора с загрузкой папки: GitHub на этой машине не нужен вовсе, поэтому она первая.
+        Assert.Contains("https://apps.encycam.com/publish", res);
+        Assert.Contains("A folder with the extension", res);
+        Assert.Contains("Upload and publish", res);
         Assert.Contains("Use this template", res);
         // Не «найди кнопку», а готовая форма с именем: ссылка обязана нести имя расширения.
         Assert.Contains("github.com/new?template_owner=EncySoftware&template_name=ency-extension-template&name=GoodName", res);
         Assert.Contains("Run workflow", res);
-        Assert.True(res.IndexOf("Use this template", StringComparison.Ordinal)
-                    < res.IndexOf("gh auth login", StringComparison.Ordinal),
-            "путь через браузер должен стоять раньше консольного");
+        int store = res.IndexOf("apps.encycam.com/publish", StringComparison.Ordinal);
+        int form = res.IndexOf("Use this template", StringComparison.Ordinal);
+        int console = res.IndexOf("gh auth login", StringComparison.Ordinal);
+        Assert.True(store < form && form < console,
+            "порядок: страница стора, потом форма GitHub, консоль последней");
         Assert.Contains("gh auth login", res);
     }
 }
