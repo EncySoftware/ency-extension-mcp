@@ -149,13 +149,14 @@ public class FolderPublishTools
 
     // ---------------------------------------------------------------- publish_folder
 
-    // Правка шаблона не догоняет уже созданные расширения: они получили его снимок. Этот тул —
-    // обратный ход, и он трогает ровно то, что принадлежит шаблону: пин SDK и файл прогона.
-    // Код автора не читается и не меняется.
+    // An edit to the template never reaches the extensions already created: they hold a snapshot of
+    // it. This tool is the way back, and it touches exactly what belongs to the template - the SDK
+    // pin, the workflow and the rules. The author's own code is neither read nor changed.
     [McpServerTool(Name = "update_extension"), Description(
         "Bring an existing extension in line with the current template: fix the SDK pin when it " +
-        "points at a version no released application carries, and refresh the publish workflow. " +
-        "Touches nothing else - the author's own code is not read.")]
+        "points at a version no released application carries, and refresh what the template owns - " +
+        "the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed. " +
+        "Touches nothing under src/ - the author's own code is neither read nor changed.")]
     public async Task<string> UpdateExtension(
         [Description("The extension folder. Default: current directory")] string? folder = null)
     {
@@ -171,7 +172,8 @@ public class FolderPublishTools
         string? want = await store.GetRecommendedSdk();
         var changed = new List<string>();
 
-        // Стор не ответил — молчим и ничего не трогаем: «не знаю» не повод переписывать чужой пин.
+        // The store did not answer: stay quiet and touch nothing. "I don't know" is no reason to
+        // rewrite somebody's pin.
         if (want == null)
         {
             log("the store did not say which SDK to build against - the pin was left alone");
@@ -197,23 +199,25 @@ public class FolderPublishTools
             }
         }
 
-        // Файл прогона принадлежит шаблону целиком, поэтому берётся как есть — в нём и живут проверки,
-        // которых у старых репозиториев ещё нет.
+        // These files belong to the template whole, so they are taken as they are - the checks an
+        // older repository has never seen live in them.
         try
         {
             byte[] zip = await fetchTemplateZip();
-            string? fresh = TemplateFile(zip, ".github/workflows/publish.yml");
-            string wfPath = Path.Combine(root, ".github", "workflows", "publish.yml");
-            if (fresh != null && (!File.Exists(wfPath) || File.ReadAllText(wfPath) != fresh))
+            foreach (var (rel, text) in TemplateOwnedFiles(zip))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(wfPath)!);
-                File.WriteAllText(wfPath, fresh);
-                changed.Add(".github/workflows/publish.yml: refreshed from the template");
+                string path = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
+                // Compared without line endings: a repository checked out on Windows carries CRLF, and
+                // rewriting every file on every run would be reported as a change that is not one.
+                if (File.Exists(path) && SameText(File.ReadAllText(path), text)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, text);
+                changed.Add($"{rel}: refreshed from the template");
             }
         }
         catch (Exception e)
         {
-            log($"could not refresh the workflow ({e.Message}) - the pin above still stands");
+            log($"could not refresh the template files ({e.Message}) - the pin above still stands");
         }
 
         if (changed.Count == 0)
@@ -227,6 +231,35 @@ public class FolderPublishTools
              + "Commit, push, and publish a new version (Actions -> Run workflow, or a v* tag).";
     }
 
+    // What the template owns and the author does not: the workflow that publishes, the rules the
+    // assistant writes code by, and the feed it restores from. Four guides in .cursor/rules were
+    // unusable until 03.09.2026, and every extension made before that still holds the bad copies.
+    // Deliberately absent: bootstrap.yml and rename.ps1 (they delete themselves on the first push,
+    // and putting them back would re-run a rename that has already happened), .gitignore and
+    // README.md (authors do edit those), and everything under src/ - that is the author's code.
+    private static readonly string[] TemplateOwned =
+    {
+        ".github/workflows/publish.yml", "AGENTS.md", "nuget.config", ".mcp.json", ".cursor/mcp.json",
+    };
+
+    private static bool SameText(string a, string b) => a.Replace("\r\n", "\n") == b.Replace("\r\n", "\n");
+
+    /** Every template-owned file in the zip, by its path inside the repository. */
+    public static IEnumerable<(string Path, string Text)> TemplateOwnedFiles(byte[] zip)
+    {
+        using var archive = new System.IO.Compression.ZipArchive(new MemoryStream(zip));
+        foreach (var entry in archive.Entries)
+        {
+            int slash = entry.FullName.IndexOf('/');   // GitHub wraps the tree in one folder
+            if (slash < 0 || entry.FullName.EndsWith("/")) continue;
+            string rel = entry.FullName[(slash + 1)..];
+            if (!TemplateOwned.Contains(rel, StringComparer.OrdinalIgnoreCase)
+                && !rel.StartsWith(".cursor/rules/", StringComparison.OrdinalIgnoreCase)) continue;
+            using var reader = new StreamReader(entry.Open());
+            yield return (rel, reader.ReadToEnd());
+        }
+    }
+
     /** One file out of the template zip, by its path inside the repository. */
     private static string? TemplateFile(byte[] zip, string pathInRepo)
     {
@@ -236,6 +269,44 @@ public class FolderPublishTools
         if (entry == null) return null;
         using var reader = new StreamReader(entry.Open());
         return reader.ReadToEnd();
+    }
+
+    [McpServerTool(Name = "check_extension"), Description(
+        "Check an extension folder before publishing, without building or uploading anything: the " +
+        "name the store would use, the card's text and category, the identifiers ENCY will ask for, " +
+        "the target framework. publish_folder runs the same checks itself and refuses on the ones " +
+        "that would cost a name or a broken card.")]
+    public async Task<string> CheckExtension(
+        [Description("The extension folder. Default: current directory")] string? folder = null,
+        [Description("The name you would publish under - checked against package.info.json")] string? name = null)
+    {
+        string root = Path.GetFullPath(folder ?? Directory.GetCurrentDirectory());
+        if (!Directory.Exists(root)) return $"ERROR: no such folder: {root}";
+
+        var found = await Inspect(root, name);
+        if (found.Count == 0) return $"{root}: nothing to fix before publishing.";
+        return "Before publishing:" + Environment.NewLine + string.Join(Environment.NewLine,
+            found.Select(f => (f.Blocking ? "  - STOPS THE PUBLISH: " : "  - ") + f.Text));
+    }
+
+    /** What the folder itself says about being ready, with the template to compare its wording against. */
+    private async Task<IReadOnlyList<Finding>> Inspect(string root, string? name)
+    {
+        string? readme = null, description = null;
+        try
+        {
+            byte[] zip = await fetchTemplateZip();
+            readme = TemplateFile(zip, "src/readme.md");
+            if (TemplateFile(zip, "src/package.info.json") is { } manifest)
+                description = Preflight.Field(manifest, "description");
+        }
+        catch (Exception e)
+        {
+            // Without the template two checks go quiet: "still the sample text" cannot be told from
+            // "written by hand". Every other check is read off the folder and stands on its own.
+            log($"could not fetch the template to compare the wording against ({e.Message})");
+        }
+        return Preflight.Check(root, name, readme, description);
     }
 
     [McpServerTool(Name = "publish_folder"), Description(
@@ -260,7 +331,12 @@ public class FolderPublishTools
         catch (FolderPlanException e) { return "ERROR: " + e.Message; }
         log($"{name}: {plan.Files.Count} files from {plan.Root} ({plan.Bytes / 1024} KB)");
 
+        var checks = await Inspect(plan.Root, name);
+        if (checks.Any(f => f.Blocking))
+            return "ERROR: " + string.Join(" ", checks.Where(f => f.Blocking).Select(f => f.Text));
+
         var sb = new StringBuilder();
+        foreach (var f in checks) sb.AppendLine("- check: " + f.Text);
         string? token = await TokenOrBrowserLogin(sb);
         if (token == null)
             return "ERROR: not signed in to the store. The browser sign-in did not complete — ask the author to finish "

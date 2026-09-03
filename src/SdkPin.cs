@@ -5,11 +5,11 @@ namespace EncyExtensionMcp;
 /** What an extension's files say about the SDK, and what a fix would change them to. */
 public sealed record SdkPinState(string? InfoJsonVersion, string? CsprojVersion, bool NeedsFix);
 
-// Расширение получает СНИМОК шаблона в момент создания и дальше живёт своей жизнью: правка шаблона
-// уже созданные репозитории не догоняет. Поэтому нужен обратный ход — сверить чужую папку с тем,
-// что советует стор, и поправить ровно то, что принадлежит шаблону. Чинится только пин ИЗ БУДУЩЕГО:
-// собранное под старый SDK грузится в новых версиях, обратное - никогда, поэтому «старее
-// рекомендованного» не дефект и трогать его нельзя.
+// An extension gets a SNAPSHOT of the template when it is created and lives its own life from
+// there: an edit to the template never reaches the repositories already made. Hence the way back -
+// compare somebody's folder with what the store advises and fix exactly what belongs to the
+// template. Only a pin FROM THE FUTURE is fixed: what was built against an older SDK loads in newer
+// applications, the other way round loads nowhere, so "older than recommended" is not a defect.
 /** Reading and fixing the SDK pin in an extension's own files. */
 public static class SdkPin
 {
@@ -34,9 +34,9 @@ public static class SdkPin
         return a != null && b != null && a > b;
     }
 
-    // Версия SDK записана в манифесте ДВАЖДЫ: полем sdkVersion (его читает стор) и в списке
-    // dependencies (он уезжает в nuspec, и по нему клиент NuGet тянет пакет при установке). Поправить
-    // одно и забыть другое — значит собрать под одну версию, а потребовать другую.
+    // The SDK version is written in the manifest TWICE: as sdkVersion, which the store reads, and in
+    // dependencies, which goes into the nuspec and is what the NuGet client resolves at install time.
+    // Fixing one and forgetting the other means building against one version and asking for another.
     private static readonly Regex SdkDependency = new(
         @"\{[^{}]*""EncySoftware\.CAMAPI\.SDK\.Net""[^{}]*\}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -56,8 +56,8 @@ public static class SdkPin
         SdkDependency.Match(text) is { Success: true } m && DependencyVersion.Match(m.Value) is { Success: true } v
             ? v.Groups[1].Value : null;
 
-    // Квадратные скобки — не украшение: без них NuGet читает версию как «не ниже», и следующий
-    // restore тихо поднимет её до свежайшей на фиде. Ровно так пин и уползает.
+    // The brackets are not decoration: without them NuGet reads the version as "no lower than", and
+    // the next restore quietly raises it to the newest one on the feed. That is how a pin drifts.
     /** The same text with an EXACT pin, brackets included. */
     public static string WriteCsproj(string text, string version) =>
         Csproj.Replace(text, m => m.Groups[1].Value + "[" + version + "]" + m.Groups[3].Value, 1);

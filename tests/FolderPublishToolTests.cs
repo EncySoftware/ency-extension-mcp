@@ -16,7 +16,7 @@ public class FolderPublishToolTests
         new(store, auth ?? new FakeStoreAuth(),
             url => { _opened.Add(url); return Task.CompletedTask; },
             t => { _waited.Add(t); return Task.CompletedTask; },
-            _log.Add, zip);
+            _log.Add, zip ?? (() => Task.FromResult(TemplateZip())));
 
     /** The template as GitHub serves it: one wrapping folder, src/ with the placeholder, rules beside it. */
     private static byte[] TemplateZip()
@@ -414,5 +414,118 @@ public class FolderPublishToolTests
         Assert.Contains("failed at Publish", res);
         Assert.Contains("virus scanner", res);
         Assert.Contains("No publish run", await Tools(new FakeStoreClient()).PublishFolderStatus("Other"));
+    }
+
+    // ── update_extension: what the template owns, brought forward ──────────────────────────────────
+
+    /** A zip shaped like the one GitHub serves for a branch: one wrapping folder, the tree inside. */
+    private static byte[] Zip(params (string Path, string Text)[] entries)
+    {
+        using var ms = new MemoryStream();
+        using (var z = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+            foreach (var (path, text) in entries)
+            {
+                using var w = new StreamWriter(z.CreateEntry("ency-extension-template-main/" + path).Open());
+                w.Write(text);
+            }
+        return ms.ToArray();
+    }
+
+    /// <summary>Four guides under .cursor/rules were unusable until 03.09.2026 and every extension made
+    /// before that still holds the bad copies: bringing a folder in line has to carry the rules, not
+    /// only the workflow. What deletes itself on the first push must NOT come back, and src/ is the
+    /// author's.</summary>
+    [Fact]
+    public async Task BringsTheRulesForwardAndNotOnlyTheWorkflow()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcp-up-" + Guid.NewGuid().ToString("N"));
+        var src = Path.Combine(root, "src");
+        Directory.CreateDirectory(src);
+        Directory.CreateDirectory(Path.Combine(root, ".cursor", "rules"));
+        File.WriteAllText(Path.Combine(root, "AGENTS.md"), "stale rules");
+        File.WriteAllText(Path.Combine(root, ".cursor", "rules", "type-utility.mdc"), "stale guide");
+        File.WriteAllText(Path.Combine(src, "package.info.json"), "{ \"sdkVersion\": \"3.0.9\" }");
+        File.WriteAllText(Path.Combine(src, "Extension.cs"), "the author's own code");
+        var zip = Zip((".github/workflows/publish.yml", "fresh workflow"),
+                      (".github/workflows/bootstrap.yml", "one-shot"),
+                      (".gitignore", "template's ignores"),
+                      ("AGENTS.md", "fresh rules"),
+                      ("nuget.config", "feed"),
+                      (".cursor/rules/type-utility.mdc", "fresh guide"),
+                      ("src/Extension.cs", "the template's sample"));
+        try
+        {
+            var res = await Tools(new FakeStoreClient(), zip: () => Task.FromResult(zip)).UpdateExtension(root);
+
+            Assert.Equal("fresh guide", File.ReadAllText(Path.Combine(root, ".cursor", "rules", "type-utility.mdc")));
+            Assert.Equal("fresh rules", File.ReadAllText(Path.Combine(root, "AGENTS.md")));
+            Assert.Equal("fresh workflow", File.ReadAllText(Path.Combine(root, ".github", "workflows", "publish.yml")));
+            Assert.Equal("feed", File.ReadAllText(Path.Combine(root, "nuget.config")));
+            Assert.Contains("3.0.9 -> 3.0.8", res);
+
+            // Deletes itself on the first push; putting it back would re-run a rename already done.
+            Assert.False(File.Exists(Path.Combine(root, ".github", "workflows", "bootstrap.yml")));
+            Assert.False(File.Exists(Path.Combine(root, ".gitignore")));
+            Assert.Equal("the author's own code", File.ReadAllText(Path.Combine(src, "Extension.cs")));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    /// <summary>A second run over the same folder has nothing to say: line endings are not a change.</summary>
+    [Fact]
+    public async Task ARepositoryCheckedOutOnWindowsIsNotRewrittenEveryTime()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcp-up-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        File.WriteAllText(Path.Combine(root, "src", "package.info.json"), "{ \"sdkVersion\": \"3.0.8\" }");
+        File.WriteAllText(Path.Combine(root, "AGENTS.md"), "line one\r\nline two\r\n");
+        try
+        {
+            var res = await Tools(new FakeStoreClient(), zip: () => Task.FromResult(Zip(("AGENTS.md", "line one\nline two\n"))))
+                .UpdateExtension(root);
+
+            Assert.Contains("Nothing to change", res);
+            Assert.Equal("line one\r\nline two\r\n", File.ReadAllText(Path.Combine(root, "AGENTS.md")));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    // ── the checks before anything leaves the machine ──────────────────────────────────────────────
+
+    /// <summary>Publishing under a name of its own is not a new version: it is a second extension, and
+    /// the name it takes can only be freed by an administrator. Nothing may leave the machine.</summary>
+    [Fact]
+    public async Task RefusesToPublishUnderANameThePackageDoesNotCarry()
+    {
+        var dir = ProjectFolder("EncyNotify");
+        File.WriteAllText(Path.Combine(dir, "package.info.json"), "{ \"packageId\": \"EncyNotify\" }");
+        var store = new FakeStoreClient { BuildsDefault = new[] { Report("PUBLISHED", "t1", "0.1.0") } };
+        try
+        {
+            var res = await Tools(store).PublishFolder("EncyNotifyPro", dir);
+
+            Assert.StartsWith("ERROR", res);
+            Assert.Contains("EncyNotifyPro", res);
+            Assert.Empty(store.Uploads);
+            Assert.Empty(store.Runs);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    /// <summary>The sloppy card is said out loud and published anyway - it is the author's to decide.</summary>
+    [Fact]
+    public async Task SaysWhatWouldMakeAPoorCardWithoutStoppingThePublish()
+    {
+        var dir = ProjectFolder("EncyNotify");
+        var store = new FakeStoreClient { BuildsDefault = new[] { Report("PUBLISHED", "t1", "0.1.0") } };
+        try
+        {
+            var res = await Tools(store).PublishFolder("EncyNotify", dir);
+
+            Assert.Contains("check:", res);
+            Assert.Contains("readme.md", res);
+            Assert.Single(store.Uploads);
+        }
+        finally { Directory.Delete(dir, true); }
     }
 }
