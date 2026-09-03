@@ -44,10 +44,11 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         // whoami: nice error early when gh is not logged in
         var who = await proc.Run("gh", "api user --jq .login");
         if (!who.Ok)
-            // Not "go to the console" but a route out: for someone without console habits `gh auth login`
-            // ends in a prompt that swallows whatever is pasted next (caught on a live first attempt, 02.09.2026).
-            // First comes the path that needs no GitHub on this machine at all: the store page takes the folder
-            // and does the rest. The GitHub form is second, the console for those who want it.
+            // Not "go to the console" but a route out. For someone without console habits
+            // `gh auth login` ends in a prompt that swallows whatever is pasted next (caught on a
+            // live first attempt, 02.09.2026). So the path that needs no GitHub on this machine
+            // comes first: the store page takes the folder and does the rest. The GitHub form is
+            // second, the console last, for those who want it.
             return "ERROR: gh CLI is not authenticated, so this tool cannot create the repository.\n" +
                    "Use publish_folder instead — it needs neither gh nor git: the store creates the repository, " +
                    "takes the folder and publishes; the author only signs in and approves the store app in the browser.\n" +

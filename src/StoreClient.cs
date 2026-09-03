@@ -54,6 +54,14 @@ public interface IStoreClient
      */
     Task<string?> ClaimPackage(string packageId, string repository, string accessToken);
 
+    /**
+     * What SDK to build against today: the one carried by the newest RELEASED application. Asked
+     * rather than remembered - a number written into the template goes stale in silence, and that is
+     * exactly how an extension built against an unreleased SDK reached the store (03.09.2026).
+     * Null when the store cannot say; a caller that does not know must not rewrite anyone's pin.
+     */
+    Task<string?> GetRecommendedSdk();
+
     string StoreBaseUrl { get; }
 
     // ---- the GitHub App route. Every call carries the person's store token; a refusal throws
@@ -92,6 +100,21 @@ public class StoreClient : IStoreClient
             r.TryGetProperty("approved", out var a) && a.GetBoolean(),
             r.TryGetProperty("unlisted", out var u) && u.GetBoolean(),
             r.TryGetProperty("latestVersion", out var v) ? v.GetString() : null);
+    }
+
+    public async Task<string?> GetRecommendedSdk()
+    {
+        try
+        {
+            var resp = await Http.GetAsync($"{_apiBase}/sdk");
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return doc.RootElement.TryGetProperty("sdkVersion", out var v) ? v.GetString() : null;
+        }
+        catch (Exception)
+        {
+            return null;   // "не знаю" - не повод трогать чужой пин
+        }
     }
 
     public async Task<IReadOnlyList<StoreCategory>> GetCategories()

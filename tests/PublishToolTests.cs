@@ -175,9 +175,10 @@ public class PublishToolTests
         var res = await Tools(proc).CreateExtensionRepo("GoodName",
             targetDir: Path.Combine(Path.GetTempPath(), "mcp-cr-" + Guid.NewGuid().ToString("N")));
         Assert.StartsWith("ERROR", res);
-        // The refusal must offer the console-free path BEFORE `gh auth login`: someone without console
-        // habits reads the first sentence and follows it (live first attempt, 02.09.2026). The shortest path
-        // is the store page with a folder upload: it needs no GitHub on this machine, so it goes first.
+        // The refusal must offer the console-free path BEFORE `gh auth login`: someone without
+        // console habits reads the first sentence and follows it (live first attempt, 02.09.2026).
+        // The shortest path is the store page with a folder upload — it needs no GitHub on this
+        // machine at all, so it goes first.
         Assert.Contains("publish_folder", res);
         Assert.True(res.IndexOf("publish_folder", StringComparison.Ordinal) < res.IndexOf("apps.encycam.com/publish", StringComparison.Ordinal),
             "the tool without gh is named before the page");

@@ -149,6 +149,92 @@ public class FolderPublishTools
 
     // ---------------------------------------------------------------- publish_folder
 
+    // Правка шаблона не догоняет уже созданные расширения: они получили его снимок. Этот тул —
+    // обратный ход, и он трогает ровно то, что принадлежит шаблону: пин SDK и файл прогона.
+    // Код автора не читается и не меняется.
+    [McpServerTool(Name = "update_extension"), Description(
+        "Bring an existing extension in line with the current template: fix the SDK pin when it " +
+        "points at a version no released application carries, and refresh the publish workflow. " +
+        "Touches nothing else - the author's own code is not read.")]
+    public async Task<string> UpdateExtension(
+        [Description("The extension folder. Default: current directory")] string? folder = null)
+    {
+        string root = Path.GetFullPath(folder ?? Directory.GetCurrentDirectory());
+        if (!Directory.Exists(root)) return $"ERROR: no such folder: {root}";
+
+        string? infoPath = Directory.EnumerateFiles(root, "package.info.json", SearchOption.AllDirectories)
+            .FirstOrDefault(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                              && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
+        if (infoPath == null) return $"ERROR: {"package.info.json"} not found under {root} - is this an extension folder?";
+        string? csprojPath = Directory.EnumerateFiles(Path.GetDirectoryName(infoPath)!, "*.csproj").FirstOrDefault();
+
+        string? want = await store.GetRecommendedSdk();
+        var changed = new List<string>();
+
+        // Стор не ответил — молчим и ничего не трогаем: «не знаю» не повод переписывать чужой пин.
+        if (want == null)
+        {
+            log("the store did not say which SDK to build against - the pin was left alone");
+        }
+        else
+        {
+            string info = File.ReadAllText(infoPath);
+            string? pinnedInfo = SdkPin.ReadInfoJson(info);
+            string? pinnedCsproj = csprojPath == null ? null : SdkPin.ReadCsproj(File.ReadAllText(csprojPath));
+
+            if (SdkPin.IsFromTheFuture(pinnedInfo, want))
+            {
+                File.WriteAllText(infoPath, SdkPin.WriteInfoJson(info, want));
+                changed.Add($"{"package.info.json"}: sdkVersion {pinnedInfo} -> {want}");
+            }
+            if (csprojPath != null && SdkPin.IsFromTheFuture(pinnedCsproj, want))
+            {
+                File.WriteAllText(csprojPath, SdkPin.WriteCsproj(File.ReadAllText(csprojPath), want));
+                changed.Add($"{Path.GetFileName(csprojPath)}: SDK {pinnedCsproj} -> [{want}] (exact, so restore cannot raise it)");
+            }
+        }
+
+        // Файл прогона принадлежит шаблону целиком, поэтому берётся как есть — в нём и живут проверки,
+        // которых у старых репозиториев ещё нет.
+        try
+        {
+            byte[] zip = await fetchTemplateZip();
+            string? fresh = TemplateFile(zip, ".github/workflows/publish.yml");
+            string wfPath = Path.Combine(root, ".github", "workflows", "publish.yml");
+            if (fresh != null && (!File.Exists(wfPath) || File.ReadAllText(wfPath) != fresh))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(wfPath)!);
+                File.WriteAllText(wfPath, fresh);
+                changed.Add(".github/workflows/publish.yml: refreshed from the template");
+            }
+        }
+        catch (Exception e)
+        {
+            log($"could not refresh the workflow ({e.Message}) - the pin above still stands");
+        }
+
+        if (changed.Count == 0)
+            return want == null
+                ? "Nothing changed: the store did not answer, so the SDK pin was left as it is."
+                : $"Nothing to change - the SDK pin is {SdkPin.ReadInfoJson(File.ReadAllText(infoPath))}, "
+                  + $"the newest released one carries {want}, and older is fine.";
+
+        return "Updated:" + Environment.NewLine + string.Join(Environment.NewLine, changed.Select(c => "  - " + c))
+             + Environment.NewLine + Environment.NewLine
+             + "Commit, push, and publish a new version (Actions -> Run workflow, or a v* tag).";
+    }
+
+    /** One file out of the template zip, by its path inside the repository. */
+    private static string? TemplateFile(byte[] zip, string pathInRepo)
+    {
+        using var archive = new System.IO.Compression.ZipArchive(new MemoryStream(zip));
+        var entry = archive.Entries.FirstOrDefault(e =>
+            e.FullName.EndsWith("/" + pathInRepo, StringComparison.OrdinalIgnoreCase));
+        if (entry == null) return null;
+        using var reader = new StreamReader(entry.Open());
+        return reader.ReadToEnd();
+    }
+
     [McpServerTool(Name = "publish_folder"), Description(
         "Publish an ENCY extension from a local folder with NO git and NO gh on this machine — the " +
         "preferred way to publish. The store creates the repository in the author's GitHub account " +

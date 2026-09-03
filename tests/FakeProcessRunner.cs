@@ -38,7 +38,11 @@ public class FakeStoreClient : IStoreClient
         new StoreCategory("operation", "Operation"),
     };
 
+    /** Что стор советует собирать; null = стор не ответил. */
+    public string? RecommendedSdk { get; set; } = "3.0.8";
+
     public Task<StoreCard?> GetCard(string slugOrPackageId) => Task.FromResult(Card);
+    public Task<string?> GetRecommendedSdk() => Task.FromResult(RecommendedSdk);
     public Task<IReadOnlyList<StoreCategory>> GetCategories() =>
         Task.FromResult<IReadOnlyList<StoreCategory>>(Categories);
 
