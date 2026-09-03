@@ -180,12 +180,15 @@ public class FolderPublishTools
         {
             string info = File.ReadAllText(infoPath);
             string? pinnedInfo = SdkPin.ReadInfoJson(info);
+            string? pinnedDep = SdkPin.ReadInfoJsonDependency(info);
             string? pinnedCsproj = csprojPath == null ? null : SdkPin.ReadCsproj(File.ReadAllText(csprojPath));
+            bool infoAhead = SdkPin.IsFromTheFuture(pinnedInfo, want), depAhead = SdkPin.IsFromTheFuture(pinnedDep, want);
 
-            if (SdkPin.IsFromTheFuture(pinnedInfo, want))
+            if (infoAhead || depAhead)
             {
                 File.WriteAllText(infoPath, SdkPin.WriteInfoJson(info, want));
-                changed.Add($"{"package.info.json"}: sdkVersion {pinnedInfo} -> {want}");
+                if (infoAhead) changed.Add($"{"package.info.json"}: sdkVersion {pinnedInfo} -> {want}");
+                if (depAhead) changed.Add($"{"package.info.json"}: the SDK dependency {pinnedDep} -> {want} (this one the NuGet client resolves at install)");
             }
             if (csprojPath != null && SdkPin.IsFromTheFuture(pinnedCsproj, want))
             {

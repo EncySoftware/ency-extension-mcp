@@ -29,6 +29,45 @@ public class SdkPinTests
         Assert.Contains("\"packageId\": \"X\"", fixedUp);   // остальное не тронуто
     }
 
+    /// <summary>Версия SDK лежит в манифесте дважды, и вторую читает клиент NuGet при установке:
+    /// поправить только первую значит собрать под одну версию, а потребовать другую.</summary>
+    [Fact]
+    public void FixesBothPlacesTheManifestNamesTheSdk()
+    {
+        const string json = """
+            {
+              "packageId": "X",
+              "targetFramework": "net10.0",
+              "sdkVersion": "3.0.9",
+              "dependencies": [ { "id": "EncySoftware.CAMAPI.SDK.Net", "version": "3.0.9" } ]
+            }
+            """;
+
+        Assert.Equal("3.0.9", SdkPin.ReadInfoJsonDependency(json));
+        string fixedUp = SdkPin.WriteInfoJson(json, "3.0.8");
+
+        Assert.Equal("3.0.8", SdkPin.ReadInfoJson(fixedUp));
+        Assert.Equal("3.0.8", SdkPin.ReadInfoJsonDependency(fixedUp));
+        Assert.DoesNotContain("3.0.9", fixedUp);
+        Assert.Contains("\"targetFramework\": \"net10.0\"", fixedUp);   // остальное не тронуто
+    }
+
+    /// <summary>Чужая зависимость с тем же полем version остаётся при своей версии.</summary>
+    [Fact]
+    public void LeavesEveryOtherDependencyAlone()
+    {
+        const string json = """
+            { "sdkVersion": "3.0.9", "dependencies": [
+                { "id": "Newtonsoft.Json", "version": "13.0.3" },
+                { "id": "EncySoftware.CAMAPI.SDK.Net", "version": "3.0.9" } ] }
+            """;
+
+        string fixedUp = SdkPin.WriteInfoJson(json, "3.0.8");
+
+        Assert.Contains("\"id\": \"Newtonsoft.Json\", \"version\": \"13.0.3\"", fixedUp);
+        Assert.Equal("3.0.8", SdkPin.ReadInfoJsonDependency(fixedUp));
+    }
+
     [Fact]
     public void RewritesTheProjectPinAsExact()
     {

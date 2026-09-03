@@ -34,13 +34,27 @@ public static class SdkPin
         return a != null && b != null && a > b;
     }
 
+    // Версия SDK записана в манифесте ДВАЖДЫ: полем sdkVersion (его читает стор) и в списке
+    // dependencies (он уезжает в nuspec, и по нему клиент NuGet тянет пакет при установке). Поправить
+    // одно и забыть другое — значит собрать под одну версию, а потребовать другую.
+    private static readonly Regex SdkDependency = new(
+        @"\{[^{}]*""EncySoftware\.CAMAPI\.SDK\.Net""[^{}]*\}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DependencyVersion = new(@"""version""\s*:\s*""([^""]+)""", RegexOptions.Compiled);
+
     public static string? ReadInfoJson(string text) => InfoJson.Match(text) is { Success: true } m ? m.Groups[1].Value : null;
 
     public static string? ReadCsproj(string text) => Csproj.Match(text) is { Success: true } m ? m.Groups[2].Value : null;
 
     /** The same text with the pin set to <paramref name="version"/>; unchanged when there is no pin. */
     public static string WriteInfoJson(string text, string version) =>
-        InfoJson.Replace(text, $"\"sdkVersion\": \"{version}\"", 1);
+        SdkDependency.Replace(InfoJson.Replace(text, $"\"sdkVersion\": \"{version}\"", 1),
+                              m => DependencyVersion.Replace(m.Value, $"\"version\": \"{version}\"", 1), 1);
+
+    /** The SDK version the manifest asks NuGet for, which is not the same field as the pin. */
+    public static string? ReadInfoJsonDependency(string text) =>
+        SdkDependency.Match(text) is { Success: true } m && DependencyVersion.Match(m.Value) is { Success: true } v
+            ? v.Groups[1].Value : null;
 
     // Квадратные скобки — не украшение: без них NuGet читает версию как «не ниже», и следующий
     // restore тихо поднимет её до свежайшей на фиде. Ровно так пин и уползает.
