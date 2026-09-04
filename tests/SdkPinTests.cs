@@ -100,3 +100,18 @@ public class SdkPinTests
         Assert.Equal(csproj, SdkPin.WriteCsproj(csproj, "3.0.8"));
     }
 }
+
+/// <summary>What the tool pins to is the store's advice, held down to what the store tab can actually
+/// register — the tab carries older CAMAPI copies than ENCY ships, and an extension built above that
+/// line fails registration even on the nightly (04.09.2026).</summary>
+public class SdkTargetTests
+{
+    [Theory]
+    [InlineData("3.0.8", "3.0.6")]    // the store's current answer, held down
+    [InlineData("3.0.9", "3.0.6")]
+    [InlineData("3.0.6", "3.0.6")]
+    [InlineData("3.0.1-rc.22", "3.0.1-rc.22")]   // already below the line: left alone
+    [InlineData(null, null)]
+    public void TheStoresAdviceIsHeldDownToWhatCanBeRegistered(string? recommended, string? expected) =>
+        Assert.Equal(expected, SdkPin.Target(recommended));
+}

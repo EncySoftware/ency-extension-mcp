@@ -169,7 +169,8 @@ public class FolderPublishTools
         if (infoPath == null) return $"ERROR: {"package.info.json"} not found under {root} - is this an extension folder?";
         string? csprojPath = Directory.EnumerateFiles(Path.GetDirectoryName(infoPath)!, "*.csproj").FirstOrDefault();
 
-        string? want = await store.GetRecommendedSdk();
+        // Held down to what the tab can register - see SdkPin.Target.
+        string? want = SdkPin.Target(await store.GetRecommendedSdk());
         var changed = new List<string>();
 
         // The store did not answer: stay quiet and touch nothing. "I don't know" is no reason to

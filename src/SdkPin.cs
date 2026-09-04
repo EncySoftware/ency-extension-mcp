@@ -26,6 +26,24 @@ public static class SdkPin
         return Version.TryParse(head.Count(c => c == '.') == 1 ? head + ".0" : head, out var parsed) ? parsed : null;
     }
 
+    /// <summary>The newest SDK an extension can actually be REGISTERED with, which is not the newest
+    /// the store recommends. Registration happens inside the store tab's own process, and the tab
+    /// carries its own copies of the CAMAPI assemblies - older than the ones ENCY ships. Built against
+    /// 3.0.8 an extension calls members those copies do not have, and registration fails on both the
+    /// released and the nightly application (measured 04.09.2026 on EncyPulse 0.1.0 and on a freshly
+    /// created extension). Under 3.0.6 the requirements match EncyToolsCatalog 0.1.23, which installs
+    /// and runs on the released ENCY 3.0.7 today.
+    /// <para>TEMPORARY. Drop this the moment a released application carries the tab fix, and let the
+    /// store's own answer stand.</para></summary>
+    private const string RegistrableCeiling = "3.0.6";
+
+    /// <summary>What to pin to: the store's advice, held down to what can be registered.</summary>
+    public static string? Target(string? recommended)
+    {
+        if (string.IsNullOrWhiteSpace(recommended)) return null;
+        return IsFromTheFuture(recommended, RegistrableCeiling) ? RegistrableCeiling : recommended;
+    }
+
     /** Is the pinned version ahead of what the store recommends — the only case worth touching. */
     public static bool IsFromTheFuture(string? pinned, string? recommended)
     {

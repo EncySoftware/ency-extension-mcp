@@ -461,7 +461,7 @@ public class FolderPublishToolTests
             Assert.Equal("fresh rules", File.ReadAllText(Path.Combine(root, "AGENTS.md")));
             Assert.Equal("fresh workflow", File.ReadAllText(Path.Combine(root, ".github", "workflows", "publish.yml")));
             Assert.Equal("feed", File.ReadAllText(Path.Combine(root, "nuget.config")));
-            Assert.Contains("3.0.9 -> 3.0.8", res);
+            Assert.Contains("3.0.9 -> 3.0.6", res);   // held down to what the tab can register
 
             // Deletes itself on the first push; putting it back would re-run a rename already done.
             Assert.False(File.Exists(Path.Combine(root, ".github", "workflows", "bootstrap.yml")));
@@ -477,7 +477,7 @@ public class FolderPublishToolTests
     {
         var root = Path.Combine(Path.GetTempPath(), "mcp-up-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "src"));
-        File.WriteAllText(Path.Combine(root, "src", "package.info.json"), "{ \"sdkVersion\": \"3.0.8\" }");
+        File.WriteAllText(Path.Combine(root, "src", "package.info.json"), "{ \"sdkVersion\": \"3.0.6\" }");
         File.WriteAllText(Path.Combine(root, "AGENTS.md"), "line one\r\nline two\r\n");
         try
         {
