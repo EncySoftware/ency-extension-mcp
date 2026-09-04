@@ -238,8 +238,8 @@ public class FolderPublishTools
     /// nobody can install is worse than one that adjusts a version line and says so.</para></summary>
     private async Task<List<string>> FixSdkPin(string infoPath, string? csprojPath)
     {
-        // Held down to what the tab can register - see SdkPin.Target.
-        string? want = SdkPin.Target(await store.GetRecommendedSdk());
+        // The store answers with the version to pin to - see IStoreClient.GetRecommendedSdk.
+        string? want = await store.GetRecommendedSdk();
         var changed = new List<string>();
 
         // The store did not answer: stay quiet and touch nothing. "I don't know" is no reason to

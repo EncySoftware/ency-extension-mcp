@@ -39,7 +39,10 @@ public class FakeStoreClient : IStoreClient
     };
 
     /** Что стор советует собирать; null = стор не ответил. */
-    public string? RecommendedSdk { get; set; } = "3.0.8";
+    /// <summary>What the store answers to "which SDK do I pin to". Since 04.09.2026 that is the
+    /// version it can INSTALL (registrableSdk), not the newest it recommends - they differ while the
+    /// extensions tab carries older assemblies than ENCY ships.</summary>
+    public string? RecommendedSdk { get; set; } = "3.0.6";
 
     public Task<StoreCard?> GetCard(string slugOrPackageId) => Task.FromResult(Card);
     public Task<string?> GetRecommendedSdk() => Task.FromResult(RecommendedSdk);

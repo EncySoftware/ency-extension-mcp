@@ -109,6 +109,14 @@ public class StoreClient : IStoreClient
             var resp = await Http.GetAsync($"{_apiBase}/sdk");
             if (!resp.IsSuccessStatusCode) return null;
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            // registrableSdk first: the store answers with two numbers - what it recommends, and what
+            // it can actually INSTALL. They differ while the extensions tab in the released
+            // application carries older assemblies than ENCY ships, and building to the higher one
+            // produces a package nobody can install (04.09.2026). The lower one lives on the server,
+            // so raising it later is one setting rather than a release of this tool.
+            if (doc.RootElement.TryGetProperty("registrableSdk", out var ceiling)
+                && ceiling.ValueKind == JsonValueKind.String && ceiling.GetString() is { Length: > 0 } line)
+                return line;
             return doc.RootElement.TryGetProperty("sdkVersion", out var v) ? v.GetString() : null;
         }
         catch (Exception)
