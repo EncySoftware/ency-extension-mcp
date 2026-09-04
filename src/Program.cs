@@ -46,6 +46,20 @@ if (args.Length > 1 && args[0].Equals("create-folder", StringComparison.OrdinalI
     return result.StartsWith("ERROR") ? 1 : 0;
 }
 
+// `ency-extension-mcp update-extension [folder]` — the same as the MCP tool update_extension, for a
+// terminal or a script. Without it an assistant that drives the tool as a COMMAND rather than as an
+// MCP server had no way to bring an extension in line, and published it with the old SDK pin
+// unchanged — which is exactly what happened on 04.09.2026.
+if (args.Length > 0 && args[0].Equals("update-extension", StringComparison.OrdinalIgnoreCase))
+{
+    var tools = new FolderPublishTools(new StoreClient(), new StoreTokenProvider(), FolderPublishTools.OpenUrl, Task.Delay,
+        Console.Error.WriteLine);
+    string? folderArg = args.Skip(1).FirstOrDefault(a => !a.StartsWith("--"));
+    string result = await tools.UpdateExtension(folderArg);
+    Console.WriteLine(result);
+    return result.StartsWith("ERROR") ? 1 : 0;
+}
+
 // `ency-extension-mcp publish-folder <Name> [folder] [--no-wait]` — the same route as the MCP tool
 // publish_folder, for a terminal or a script: no git, no gh, the store does the GitHub work.
 if (args.Length > 1 && args[0].Equals("publish-folder", StringComparison.OrdinalIgnoreCase))

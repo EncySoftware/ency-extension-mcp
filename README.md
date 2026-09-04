@@ -39,6 +39,9 @@ the assistant and the MCP registration inside. Nothing on GitHub is touched unti
 ## Publish from a folder — no git, no gh
 
 `publish_folder(name, folder)` is the tool an assistant should reach for, and
+`ency-extension-mcp update-extension [folder]` brings an existing extension in line with the current
+template — the SDK pin and the files the template owns — from a terminal.
+
 `ency-extension-mcp publish-folder <Name> <folder>` is the same route from a terminal. The store
 does the GitHub work through its GitHub App: creates the repository in the author's account,
 commits the folder into `src/`, runs the build and reports back — the version and the card link, or
