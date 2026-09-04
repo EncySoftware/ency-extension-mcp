@@ -416,6 +416,30 @@ public class FolderPublishToolTests
         Assert.Contains("No publish run", await Tools(new FakeStoreClient()).PublishFolderStatus("Other"));
     }
 
+    /// <summary>A publish brings the SDK pin in line by itself. Asking the tool to "update the
+    /// extension" is a phrase an assistant reads as "raise its version number", and four releases went
+    /// out with a pin nothing could install while everyone believed it had been fixed (04.09.2026).</summary>
+    [Fact]
+    public async Task PublishingBringsThePinInLineBeforeTheFilesLeaveTheMachine()
+    {
+        var dir = ProjectFolder("EncyNotify");
+        File.WriteAllText(Path.Combine(dir, "package.info.json"),
+            "{ \"packageId\": \"EncyNotify\", \"sdkVersion\": \"3.0.9\" }");
+        File.WriteAllText(Path.Combine(dir, "EncyNotify.csproj"),
+            "<Project><ItemGroup><PackageReference Include=\"EncySoftware.CAMAPI.Sdk.Net\" Version=\"3.0.9\" /></ItemGroup></Project>");
+        var store = new FakeStoreClient { BuildsDefault = new[] { Report("PUBLISHED", "t1", "0.1.0") } };
+        try
+        {
+            var res = await Tools(store).PublishFolder("EncyNotify", dir);
+
+            Assert.Contains("3.0.9 -> 3.0.6", res);
+            Assert.Equal("3.0.6", SdkPin.ReadInfoJson(File.ReadAllText(Path.Combine(dir, "package.info.json"))));
+            Assert.Equal("3.0.6", SdkPin.ReadCsproj(File.ReadAllText(Path.Combine(dir, "EncyNotify.csproj"))));
+            Assert.Single(store.Uploads);   // and it still published
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     // ── update_extension: what the template owns, brought forward ──────────────────────────────────
 
     /** A zip shaped like the one GitHub serves for a branch: one wrapping folder, the tree inside. */

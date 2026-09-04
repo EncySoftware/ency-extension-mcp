@@ -169,36 +169,7 @@ public class FolderPublishTools
         if (infoPath == null) return $"ERROR: {"package.info.json"} not found under {root} - is this an extension folder?";
         string? csprojPath = Directory.EnumerateFiles(Path.GetDirectoryName(infoPath)!, "*.csproj").FirstOrDefault();
 
-        // Held down to what the tab can register - see SdkPin.Target.
-        string? want = SdkPin.Target(await store.GetRecommendedSdk());
-        var changed = new List<string>();
-
-        // The store did not answer: stay quiet and touch nothing. "I don't know" is no reason to
-        // rewrite somebody's pin.
-        if (want == null)
-        {
-            log("the store did not say which SDK to build against - the pin was left alone");
-        }
-        else
-        {
-            string info = File.ReadAllText(infoPath);
-            string? pinnedInfo = SdkPin.ReadInfoJson(info);
-            string? pinnedDep = SdkPin.ReadInfoJsonDependency(info);
-            string? pinnedCsproj = csprojPath == null ? null : SdkPin.ReadCsproj(File.ReadAllText(csprojPath));
-            bool infoAhead = SdkPin.IsFromTheFuture(pinnedInfo, want), depAhead = SdkPin.IsFromTheFuture(pinnedDep, want);
-
-            if (infoAhead || depAhead)
-            {
-                File.WriteAllText(infoPath, SdkPin.WriteInfoJson(info, want));
-                if (infoAhead) changed.Add($"{"package.info.json"}: sdkVersion {pinnedInfo} -> {want}");
-                if (depAhead) changed.Add($"{"package.info.json"}: the SDK dependency {pinnedDep} -> {want} (this one the NuGet client resolves at install)");
-            }
-            if (csprojPath != null && SdkPin.IsFromTheFuture(pinnedCsproj, want))
-            {
-                File.WriteAllText(csprojPath, SdkPin.WriteCsproj(File.ReadAllText(csprojPath), want));
-                changed.Add($"{Path.GetFileName(csprojPath)}: SDK {pinnedCsproj} -> [{want}] (exact, so restore cannot raise it)");
-            }
-        }
+        var changed = await FixSdkPin(infoPath, csprojPath);
 
         // These files belong to the template whole, so they are taken as they are - the checks an
         // older repository has never seen live in them.
@@ -222,10 +193,8 @@ public class FolderPublishTools
         }
 
         if (changed.Count == 0)
-            return want == null
-                ? "Nothing changed: the store did not answer, so the SDK pin was left as it is."
-                : $"Nothing to change - the SDK pin is {SdkPin.ReadInfoJson(File.ReadAllText(infoPath))}, "
-                  + $"the newest released one carries {want}, and older is fine.";
+            return $"Nothing to change - the SDK pin is {SdkPin.ReadInfoJson(File.ReadAllText(infoPath))}, "
+                 + "which the application can register, and the template files are already current.";
 
         return "Updated:" + Environment.NewLine + string.Join(Environment.NewLine, changed.Select(c => "  - " + c))
              + Environment.NewLine + Environment.NewLine
@@ -259,6 +228,46 @@ public class FolderPublishTools
             using var reader = new StreamReader(entry.Open());
             yield return (rel, reader.ReadToEnd());
         }
+    }
+
+    /// <summary>Brings the SDK pin down to what can actually be registered, in both places the manifest
+    /// names it and in the project. Returns what it changed; empty when there was nothing to do.
+    /// <para>Called by update_extension AND by every publish: an assistant reads "update the extension"
+    /// as "raise its version number", so four releases went out with the old pin untouched while
+    /// everyone believed the tool had fixed it (04.09.2026). A publish that quietly ships a package
+    /// nobody can install is worse than one that adjusts a version line and says so.</para></summary>
+    private async Task<List<string>> FixSdkPin(string infoPath, string? csprojPath)
+    {
+        // Held down to what the tab can register - see SdkPin.Target.
+        string? want = SdkPin.Target(await store.GetRecommendedSdk());
+        var changed = new List<string>();
+
+        // The store did not answer: stay quiet and touch nothing. "I don't know" is no reason to
+        // rewrite somebody's pin.
+        if (want == null)
+        {
+            log("the store did not say which SDK to build against - the pin was left alone");
+            return changed;
+        }
+
+        string info = File.ReadAllText(infoPath);
+        string? pinnedInfo = SdkPin.ReadInfoJson(info);
+        string? pinnedDep = SdkPin.ReadInfoJsonDependency(info);
+        string? pinnedCsproj = csprojPath == null ? null : SdkPin.ReadCsproj(File.ReadAllText(csprojPath));
+        bool infoAhead = SdkPin.IsFromTheFuture(pinnedInfo, want), depAhead = SdkPin.IsFromTheFuture(pinnedDep, want);
+
+        if (infoAhead || depAhead)
+        {
+            File.WriteAllText(infoPath, SdkPin.WriteInfoJson(info, want));
+            if (infoAhead) changed.Add($"{"package.info.json"}: sdkVersion {pinnedInfo} -> {want}");
+            if (depAhead) changed.Add($"{"package.info.json"}: the SDK dependency {pinnedDep} -> {want} (this one the NuGet client resolves at install)");
+        }
+        if (csprojPath != null && SdkPin.IsFromTheFuture(pinnedCsproj, want))
+        {
+            File.WriteAllText(csprojPath, SdkPin.WriteCsproj(File.ReadAllText(csprojPath), want));
+            changed.Add($"{Path.GetFileName(csprojPath)}: SDK {pinnedCsproj} -> [{want}] (exact, so restore cannot raise it)");
+        }
+        return changed;
     }
 
     /** One file out of the template zip, by its path inside the repository. */
@@ -338,6 +347,17 @@ public class FolderPublishTools
 
         var sb = new StringBuilder();
         foreach (var f in checks) sb.AppendLine("- check: " + f.Text);
+
+        // The pin is brought in line HERE, not only when somebody remembers to ask for it: an assistant
+        // reads "update the extension" as "raise its version number", and four releases went out with a
+        // pin nothing could install while everyone believed the tool had fixed it (04.09.2026).
+        string? manifest = Directory.EnumerateFiles(plan.Root, "package.info.json", SearchOption.AllDirectories)
+            .FirstOrDefault(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                              && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
+        if (manifest != null)
+            foreach (var line in await FixSdkPin(manifest,
+                     Directory.EnumerateFiles(Path.GetDirectoryName(manifest)!, "*.csproj").FirstOrDefault()))
+                sb.AppendLine("- " + line);
         string? token = await TokenOrBrowserLogin(sb);
         if (token == null)
             return "ERROR: not signed in to the store. The browser sign-in did not complete — ask the author to finish "
