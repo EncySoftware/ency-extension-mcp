@@ -38,7 +38,7 @@ public class FakeStoreClient : IStoreClient
         new StoreCategory("operation", "Operation"),
     };
 
-    /** Что стор советует собирать; null = стор не ответил. */
+    /** What the store advises building against; null = the store did not answer. */
     /// <summary>What the store answers to "which SDK do I pin to". Since 04.09.2026 that is the
     /// version it can INSTALL (registrableSdk), not the newest it recommends - they differ while the
     /// extensions tab carries older assemblies than ENCY ships.</summary>
@@ -97,6 +97,43 @@ public class FakeStoreClient : IStoreClient
     }
     public Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken) =>
         Task.FromResult(Builds.Count > 0 ? Builds.Dequeue() : BuildsDefault);
+
+    // ---- publishing what was built on the author's machine
+    public List<(string FileName, byte[] Bytes)> StagedNupkgs { get; } = new();
+    public List<(string FileName, byte[] Bytes)> UploadedFiles { get; } = new();
+    public List<(IReadOnlyList<string> Ids, string? Version)> Packed { get; } = new();
+    public List<(string PackageId, string Version, string? Category)> Published { get; } = new();
+    /** What the store answers when parsing the package; null — it accepts. */
+    public string? StageFailure { get; set; }
+    public bool StagedHasMarker { get; set; } = true;
+    public bool PublishedApproved { get; set; } = true;
+
+    public Task<StagedPackage> StageNupkg(string fileName, byte[] nupkg, string accessToken)
+    {
+        if (StageFailure != null) throw new StoreApiException(400, StageFailure);
+        StagedNupkgs.Add((fileName, nupkg));
+        return Task.FromResult(new StagedPackage("MyExt", "0.1.0", StagedHasMarker, "up-1", "3.0.6", false));
+    }
+
+    public Task<string> UploadFile(string fileName, byte[] bytes, string accessToken)
+    {
+        UploadedFiles.Add((fileName, bytes));
+        return Task.FromResult("up-" + UploadedFiles.Count);
+    }
+
+    public Task<StagedPackage> PackFolder(IReadOnlyList<string> fileUploadIds, string? version, string accessToken)
+    {
+        if (StageFailure != null) throw new StoreApiException(400, StageFailure);
+        Packed.Add((fileUploadIds, version));
+        return Task.FromResult(new StagedPackage("MyExt", version ?? "0.1.0", StagedHasMarker, "up-packed", "3.0.6", false));
+    }
+
+    public Task<PublishedCard> PublishStaged(StagedPackage staged, string? category, string accessToken)
+    {
+        Published.Add((staged.PackageId, staged.Version, category));
+        return Task.FromResult(new PublishedCard(staged.PackageId.ToLowerInvariant(), staged.PackageId,
+            staged.Version, PublishedApproved, false));
+    }
 }
 
 /** Sign-in as a test sees it: a token or none, and a browser login that either works or does not. */

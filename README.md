@@ -8,6 +8,7 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 | `create_extension_folder` | The project from the template on this machine, renamed — no GitHub account, no git. Start here. |
 | `publish_folder` | Publishes a local folder with no git and no gh: the store makes the repository, commits the folder, builds and publishes; the author only signs in and approves the store app in the browser. |
 | `publish_folder_status` | The latest publish_folder result: building, published (version + card), or failed (step + log). |
+| `publish_package` | Publishes what you built on THIS machine — a ready `.nupkg` or a build-output folder the store packs. No git, no GitHub, no repository; the card is yours. |
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
 | `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
@@ -50,6 +51,27 @@ and, once, the app's consent page; the tool opens both and waits, and nothing is
 terminal. The next version is the same call. Repositories made from the template carry
 `.mcp.json` and `.cursor/mcp.json`, so Claude Code and Cursor see the server as soon as the tool is
 installed (`dotnet tool install -g EncySoftware.ExtensionStoreMcp`).
+
+## Publish what you built yourself — no repository at all
+
+`publish_package [path]` is for the author who keeps the sources in their own repository and builds
+the package on their own machine: the other two routes both end up needing a GitHub repository, and
+without this one the only way left was uploading the `.nupkg` through the website for every version.
+
+Give it a ready `.nupkg`, or the flat build-output folder (`<Name>.dll` + `<Name>.settings.json` +
+`package.info.json`, the output of `dotnet build`, not `dotnet publish`): a folder is uploaded file
+by file and the STORE packs it, exactly as it does for CI. Nothing is built here — that is the
+author's own business. From a terminal:
+
+```
+ency-extension-mcp publish-package                      # the .nupkg or build output in this folder
+ency-extension-mcp publish-package bin/Release/net10.0-windows --version 0.2.0
+ency-extension-mcp publish-package MyExt.0.2.0.nupkg --category operation
+```
+
+It publishes under the author's own store account (the same browser sign-in as everything else). A
+new name waits for a moderator once; a new version of an extension already in the catalogue appears
+at once.
 
 ## Publishing without a console
 

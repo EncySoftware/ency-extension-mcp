@@ -74,6 +74,24 @@ if (args.Length > 1 && args[0].Equals("publish-folder", StringComparison.Ordinal
     return result.StartsWith("ERROR") ? 1 : 0;
 }
 
+// `ency-extension-mcp publish-package [path] [--version X] [--category id]` — the MCP tool
+// publish_package for a terminal: publish what was built on this machine, no git, no GitHub. It
+// exists for the same reason as update-extension: an assistant that drives the tool as a COMMAND
+// rather than as an MCP server has no other way onto this route.
+if (args.Length > 0 && args[0].Equals("publish-package", StringComparison.OrdinalIgnoreCase))
+{
+    var tools = new LocalPublishTools(new StoreClient(), new StoreTokenProvider(), Console.Error.WriteLine);
+    string? pathArg = args.Skip(1).FirstOrDefault(a => !a.StartsWith("--"));
+    string? Value(string name)
+    {
+        int i = Array.FindIndex(args, a => a.Equals("--" + name, StringComparison.OrdinalIgnoreCase));
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+    }
+    string result = await tools.PublishPackage(pathArg, Value("version"), Value("category"));
+    Console.WriteLine(result);
+    return result.StartsWith("ERROR") ? 1 : 0;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // stdout carries the MCP protocol — all logging must go to stderr.
@@ -89,6 +107,8 @@ builder.Services.AddSingleton<ExtensionStoreTools>();
 builder.Services.AddSingleton(sp => new FolderPublishTools(
     sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(),
     FolderPublishTools.OpenUrl, Task.Delay, s => Console.Error.WriteLine(s)));
+builder.Services.AddSingleton(sp => new LocalPublishTools(
+    sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(), s => Console.Error.WriteLine(s)));
 builder.Services.AddSingleton<GuideTools>();
 
 builder.Services
@@ -96,6 +116,7 @@ builder.Services
     .WithStdioServerTransport()
     .WithTools<ExtensionStoreTools>()
     .WithTools<FolderPublishTools>()
+    .WithTools<LocalPublishTools>()
     .WithTools<GuideTools>();
 
 await builder.Build().RunAsync();

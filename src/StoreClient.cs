@@ -35,6 +35,17 @@ public class StoreApiException(int status, string message) : Exception(message)
     public int Status { get; } = status;
 }
 
+/**
+ * A package the store has staged and parsed: what gets published next is THIS one, by
+ * {@code NupkgUploadId}. Both routes answer in the same shape — a ready .nupkg and a build folder
+ * the store packs itself.
+ */
+public record StagedPackage(string PackageId, string Version, bool HasMarker, string NupkgUploadId,
+                            string? SdkVersion, bool SdkNewerThanAnyRelease);
+
+/** The card as it stands after the publish. */
+public record PublishedCard(string Slug, string PackageId, string? LatestVersion, bool Approved, bool Unlisted);
+
 public interface IStoreClient
 {
     /** Card by slug or packageId; null when the store has no such extension (yet). */
@@ -73,6 +84,21 @@ public interface IStoreClient
     Task<SourcesUploaded> UploadSources(string packageId, IReadOnlyList<SourceFile> files, string accessToken);
     Task<RunStarted> StartRun(string packageId, string accessToken);
     Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken);
+
+    // ---- publishing what was built ON THIS machine: neither git nor GitHub takes part. The server
+    //      has done this all along — it is how the website publishes; only the client was missing (15.09.2026).
+
+    /** Stage a ready .nupkg and have it parsed: the answer carries the name, the version and the marker. */
+    Task<StagedPackage> StageNupkg(string fileName, byte[] nupkg, string accessToken);
+
+    /** Stage one file of a build; returns the id the packer will collect it by. */
+    Task<string> UploadFile(string fileName, byte[] bytes, string accessToken);
+
+    /** Pack the staged files ON THE STORE'S SIDE — the same route the CI pipeline takes. */
+    Task<StagedPackage> PackFolder(IReadOnlyList<string> fileUploadIds, string? version, string accessToken);
+
+    /** Publish the staged package. A new name then waits for a moderator; a new version does not. */
+    Task<PublishedCard> PublishStaged(StagedPackage staged, string? category, string accessToken);
 }
 
 /** Reads the public store REST API (no auth needed for cards). */
@@ -121,7 +147,7 @@ public class StoreClient : IStoreClient
         }
         catch (Exception)
         {
-            return null;   // "не знаю" - не повод трогать чужой пин
+            return null;   // "don't know" is no reason to touch somebody's pin
         }
     }
 
@@ -235,6 +261,65 @@ public class StoreClient : IStoreClient
                 Str(b, "version"), Str(b, "failedStep"), Str(b, "failureLog"), Str(b, "runUrl"), Str(b, "updatedAt")));
         return list;
     }
+
+    public async Task<StagedPackage> StageNupkg(string fileName, byte[] nupkg, string accessToken)
+    {
+        var form = new MultipartFormDataContent();
+        var part = new ByteArrayContent(nupkg);
+        part.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(part, "file", fileName);
+        using var doc = await Send(UploadHttp, HttpMethod.Post, "/extensions/parse-nupkg", accessToken, form);
+        return Staged(doc.RootElement);
+    }
+
+    public async Task<string> UploadFile(string fileName, byte[] bytes, string accessToken)
+    {
+        var form = new MultipartFormDataContent();
+        var part = new ByteArrayContent(bytes);
+        part.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(part, "file", fileName);
+        using var doc = await Send(UploadHttp, HttpMethod.Post, "/storage/upload", accessToken, form);
+        return doc.RootElement.GetProperty("uploadId").GetString() ?? "";
+    }
+
+    public async Task<StagedPackage> PackFolder(IReadOnlyList<string> fileUploadIds, string? version, string accessToken)
+    {
+        var body = new StringContent(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["fileUploadIds"] = fileUploadIds,
+            ["version"] = string.IsNullOrWhiteSpace(version) ? null : version,
+        }), Encoding.UTF8, "application/json");
+        using var doc = await Send(UploadHttp, HttpMethod.Post, "/extensions/pack-folder", accessToken, body);
+        return Staged(doc.RootElement);
+    }
+
+    public async Task<PublishedCard> PublishStaged(StagedPackage staged, string? category, string accessToken)
+    {
+        // packageId and version are required by the endpoint, but they come FROM THE PARSED package,
+        // not from our say-so: what gets published is what the archive holds either way.
+        var body = new StringContent(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["packageId"] = staged.PackageId,
+            ["version"] = staged.Version,
+            ["nupkgUploadId"] = staged.NupkgUploadId,
+            ["category"] = string.IsNullOrWhiteSpace(category) ? null : category,
+        }), Encoding.UTF8, "application/json");
+        using var doc = await Send(UploadHttp, HttpMethod.Post, "/extensions", accessToken, body);
+        var r = doc.RootElement;
+        return new PublishedCard(r.GetProperty("slug").GetString() ?? "",
+            r.GetProperty("packageId").GetString() ?? staged.PackageId,
+            Str(r, "latestVersion"),
+            r.TryGetProperty("approved", out var a) && a.ValueKind == JsonValueKind.True,
+            r.TryGetProperty("unlisted", out var u) && u.ValueKind == JsonValueKind.True);
+    }
+
+    private static StagedPackage Staged(JsonElement r) => new(
+        r.GetProperty("packageId").GetString() ?? "",
+        r.GetProperty("version").GetString() ?? "",
+        r.TryGetProperty("hasMarker", out var m) && m.ValueKind == JsonValueKind.True,
+        r.GetProperty("nupkgUploadId").GetString() ?? "",
+        Str(r, "sdkVersion"),
+        r.TryGetProperty("sdkNewerThanAnyRelease", out var n) && n.ValueKind == JsonValueKind.True);
 
     private static string? Str(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
