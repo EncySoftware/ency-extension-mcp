@@ -23,12 +23,21 @@ public class LocalPublishTools
     private readonly IStoreClient store;
     private readonly IStoreAuth auth;
     private readonly Action<string> log;
+    private readonly IUpdateCheck updates;
 
-    public LocalPublishTools(IStoreClient store, IStoreAuth auth, Action<string> log)
+    public LocalPublishTools(IStoreClient store, IStoreAuth auth, Action<string> log, IUpdateCheck? updates = null)
     {
         this.store = store;
         this.auth = auth;
         this.log = log;
+        this.updates = updates ?? new NoUpdateCheck();
+    }
+
+    /** The version note, when there is one, under a result worth reading to the end. */
+    private async Task<string> WithUpdateNote(string text)
+    {
+        string? note = await updates.Note();
+        return note == null ? text : text.TrimEnd() + "\n\n" + note;
     }
 
     /** What the store's packer needs in a build folder: the extension's manifest and its assembly. */
@@ -125,7 +134,7 @@ public class LocalPublishTools
         sb.AppendLine(card.Approved
             ? $"- in the catalogue: {store.StoreBaseUrl}/extension/{card.Slug}"
             : $"- waiting for a moderator; the card already opens by its link: {store.StoreBaseUrl}/extension/{card.Slug}");
-        return sb.ToString().TrimEnd();
+        return await WithUpdateNote(sb.ToString().TrimEnd());
     }
 
     [McpServerTool(Name = "check_package"), Description(

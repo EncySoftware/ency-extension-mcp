@@ -80,7 +80,7 @@ if (args.Length > 1 && args[0].Equals("publish-folder", StringComparison.Ordinal
 // rather than as an MCP server has no other way onto this route.
 if (args.Length > 0 && args[0].Equals("publish-package", StringComparison.OrdinalIgnoreCase))
 {
-    var tools = new LocalPublishTools(new StoreClient(), new StoreTokenProvider(), Console.Error.WriteLine);
+    var tools = new LocalPublishTools(new StoreClient(), new StoreTokenProvider(), Console.Error.WriteLine, new UpdateCheck());
     string? pathArg = args.Skip(1).FirstOrDefault(a => !a.StartsWith("--"));
     string? Value(string name)
     {
@@ -102,6 +102,29 @@ if (args.Length > 0 && args[0].Equals("check-package", StringComparison.OrdinalI
     return result.StartsWith("ERROR") ? 1 : 0;
 }
 
+// `ency-extension-mcp doctor` — this machine's setup for the store tools, each gap with its fix.
+if (args.Length > 0 && args[0].Equals("doctor", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine(await Doctor.Report(new ProcessRunner(), new StoreClient(), new StoreTokenProvider(), new UpdateCheck(),
+        SetupCommand.DefaultCursorConfigPath, UpdateCheck.Current));
+    return 0;
+}
+
+// `ency-extension-mcp my-extensions` — the MCP tool my_extensions for a terminal.
+if (args.Length > 0 && args[0].Equals("my-extensions", StringComparison.OrdinalIgnoreCase))
+{
+    string result = await new AccountTools(new StoreClient(), new StoreTokenProvider()).MyExtensions();
+    Console.WriteLine(result);
+    return result.StartsWith("ERROR") ? 1 : 0;
+}
+
+// `ency-extension-mcp version` — what is running, and whether nuget.org has something newer.
+if (args.Length > 0 && (args[0].Equals("version", StringComparison.OrdinalIgnoreCase) || args[0] == "--version"))
+{
+    Console.WriteLine(await new UpdateCheck().Note() ?? $"ency-extension-mcp {UpdateCheck.Current}");
+    return 0;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // stdout carries the MCP protocol — all logging must go to stderr.
@@ -111,14 +134,18 @@ builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
 builder.Services.AddSingleton<IStoreClient, StoreClient>();
 builder.Services.AddSingleton<StoreTokenProvider>();
 builder.Services.AddSingleton<IStoreAuth>(sp => sp.GetRequiredService<StoreTokenProvider>());
+builder.Services.AddSingleton<IUpdateCheck, UpdateCheck>();
 builder.Services.AddSingleton<ExtensionStoreTools>();
+builder.Services.AddSingleton<DoctorTools>();
+builder.Services.AddSingleton<AccountTools>();
 // The folder route talks to the browser and waits between polls; both are handed in so a test can
 // replace them, and every word goes to stderr — stdout is the MCP protocol.
 builder.Services.AddSingleton(sp => new FolderPublishTools(
     sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(),
-    FolderPublishTools.OpenUrl, Task.Delay, s => Console.Error.WriteLine(s)));
+    FolderPublishTools.OpenUrl, Task.Delay, s => Console.Error.WriteLine(s), null, sp.GetRequiredService<IUpdateCheck>()));
 builder.Services.AddSingleton(sp => new LocalPublishTools(
-    sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(), s => Console.Error.WriteLine(s)));
+    sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(), s => Console.Error.WriteLine(s),
+    sp.GetRequiredService<IUpdateCheck>()));
 builder.Services.AddSingleton<GuideTools>();
 
 builder.Services
@@ -127,6 +154,8 @@ builder.Services
     .WithTools<ExtensionStoreTools>()
     .WithTools<FolderPublishTools>()
     .WithTools<LocalPublishTools>()
+    .WithTools<DoctorTools>()
+    .WithTools<AccountTools>()
     .WithTools<GuideTools>();
 
 await builder.Build().RunAsync();

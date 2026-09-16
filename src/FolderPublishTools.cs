@@ -38,10 +38,13 @@ public class FolderPublishTools
     private readonly Func<TimeSpan, Task> delay;
     private readonly Action<string> log;
     private readonly Func<Task<byte[]>> fetchTemplateZip;
+    private readonly IUpdateCheck updates;
 
     public FolderPublishTools(IStoreClient store, IStoreAuth auth, Func<string, Task> openBrowser,
-                              Func<TimeSpan, Task> delay, Action<string> log, Func<Task<byte[]>>? fetchTemplateZip = null)
+                              Func<TimeSpan, Task> delay, Action<string> log, Func<Task<byte[]>>? fetchTemplateZip = null,
+                              IUpdateCheck? updates = null)
     {
+        this.updates = updates ?? new NoUpdateCheck();
         this.store = store;
         this.auth = auth;
         this.openBrowser = openBrowser;
@@ -447,7 +450,14 @@ public class FolderPublishTools
         log(report == null ? "no report from GitHub yet" : $"build {report.Status.ToLowerInvariant()}");
         sb.AppendLine();
         sb.Append(await Describe(name, report, run.ActionsUrl));
-        return sb.ToString();
+        return await WithUpdateNote(sb.ToString());
+    }
+
+    /** The version note, when there is one, under a result worth reading to the end. */
+    private async Task<string> WithUpdateNote(string text)
+    {
+        string? note = await updates.Note();
+        return note == null ? text : text.TrimEnd() + "\n\n" + note;
     }
 
     [McpServerTool(Name = "publish_folder_status"), Description(

@@ -29,6 +29,10 @@ public record RunStarted(string Repository, string ActionsUrl);
 public record BuildReport(string Repository, string? PackageId, string Status, string? Version,
                           string? FailedStep, string? FailureLog, string? RunUrl, string? UpdatedAt);
 
+/** One of the author's own cards, as the site's My published page shows it. */
+public record MyExtension(string Slug, string PackageId, string Name, string? LatestVersion, bool Approved, bool Unlisted,
+                          string? RejectionReason, string? Category, string? LastPublishedAt);
+
 /** A refusal from the store, in its own words — the `message` of its JSON error, not the JSON. */
 public class StoreApiException(int status, string message) : Exception(message)
 {
@@ -84,6 +88,8 @@ public interface IStoreClient
     Task<SourcesUploaded> UploadSources(string packageId, IReadOnlyList<SourceFile> files, string accessToken);
     Task<RunStarted> StartRun(string packageId, string accessToken);
     Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken);
+    /** Every card this person owns, whatever its state — the list behind the site's My published. */
+    Task<IReadOnlyList<MyExtension>> GetMyExtensions(string accessToken);
 
     // ---- publishing what was built ON THIS machine: neither git nor GitHub takes part. The server
     //      has done this all along — it is how the website publishes; only the client was missing (15.09.2026).
@@ -259,6 +265,23 @@ public class StoreClient : IStoreClient
                 b.GetProperty("repository").GetString() ?? "",
                 Str(b, "packageId"), b.GetProperty("status").GetString() ?? "",
                 Str(b, "version"), Str(b, "failedStep"), Str(b, "failureLog"), Str(b, "runUrl"), Str(b, "updatedAt")));
+        return list;
+    }
+
+    public async Task<IReadOnlyList<MyExtension>> GetMyExtensions(string accessToken)
+    {
+        using var doc = await Send(Http, HttpMethod.Get, "/extensions/my", accessToken);
+        var list = new List<MyExtension>();
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            string? category = e.TryGetProperty("storeCategory", out var sc) && sc.ValueKind == JsonValueKind.Object ? Str(sc, "id") : null;
+            list.Add(new MyExtension(
+                Str(e, "slug") ?? "", Str(e, "packageId") ?? "", Str(e, "name") ?? Str(e, "packageId") ?? "",
+                Str(e, "latestVersion"),
+                e.TryGetProperty("approved", out var a) && a.ValueKind == JsonValueKind.True,
+                e.TryGetProperty("unlisted", out var u) && u.ValueKind == JsonValueKind.True,
+                Str(e, "rejectionReason"), category, Str(e, "lastPublishedAt")));
+        }
         return list;
     }
 

@@ -12,8 +12,9 @@ namespace EncyExtensionMcp;
 /// Thin wrappers over `gh` + `git` + the store REST API — the author's own gh login is the auth.
 /// </summary>
 [McpServerToolType]
-public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreTokenProvider tokens)
+public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreTokenProvider tokens, IUpdateCheck? updates = null)
 {
+    private readonly IUpdateCheck updates = updates ?? new NoUpdateCheck();
     private const string TemplateRepo = "EncySoftware/ency-extension-template";
     private const string WorkflowFile = "publish.yml";
 
@@ -241,13 +242,20 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         await Task.Delay(4000); // give Actions a moment to register the run
         var run = await LatestRun(dir);
 
-        return $"""
+        return await WithUpdateNote($"""
             Pushed {tag} — GitHub Actions is building and publishing.{(categoryNote != null ? " " + categoryNote + "." : "")}
             {(chosenNote != null ? chosenNote + "\n" : "")}
             {(run != null ? $"workflow run: {run.Value.Url} ({run.Value.Status})" : "the workflow run has not registered yet")}
 
             Call publish_status to follow it to the store card.
-            """;
+            """);
+    }
+
+    /** The version note, when there is one, under a result worth reading to the end. */
+    private async Task<string> WithUpdateNote(string text)
+    {
+        string? note = await updates.Note();
+        return note == null ? text : text.TrimEnd() + "\n\n" + note;
     }
 
     /** The note for a manifest that names no category (or the default one); null when it does. */
@@ -314,7 +322,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             sb.AppendLine($"Published and approved: {packageId} {card.LatestVersion}");
             sb.AppendLine($"Card: {card.CardUrl(store.StoreBaseUrl)}{(card.Unlisted ? " (currently unlisted by the owner)" : "")}");
         }
-        return sb.ToString();
+        return await WithUpdateNote(sb.ToString());
     }
 
     // ---------------------------------------------------------------- helpers

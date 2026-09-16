@@ -228,6 +228,21 @@ public class LocalPublishToolTests
         Assert.Empty(store.Published);
     }
 
+    /** When nuget.org has a newer version, the publish result ends with the update command. */
+    [Fact]
+    public async Task The_result_ends_with_the_update_note_when_a_newer_tool_exists()
+    {
+        var store = new FakeStoreClient();
+        string nupkg = WriteNupkg(TempDir());
+        var tools = new LocalPublishTools(store, new FakeStoreAuth(), _log.Add,
+            new FakeUpdateCheck("Tool 0.2.13; 0.2.14 is available: dotnet tool update -g EncySoftware.ExtensionStoreMcp --no-cache"));
+
+        string answer = await tools.PublishPackage(nupkg);
+
+        Assert.EndsWith("--no-cache", answer);
+        Assert.Single(store.Published);
+    }
+
     /** Neither a file nor a folder at that path — the answer is about the path, not the store. */
     [Fact]
     public async Task A_path_that_is_neither_a_package_nor_a_folder_is_named()

@@ -97,6 +97,9 @@ public class FakeStoreClient : IStoreClient
     }
     public Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken) =>
         Task.FromResult(Builds.Count > 0 ? Builds.Dequeue() : BuildsDefault);
+    public List<MyExtension> MyExtensions { get; } = new();
+    public Task<IReadOnlyList<MyExtension>> GetMyExtensions(string accessToken) =>
+        Task.FromResult<IReadOnlyList<MyExtension>>(MyExtensions);
 
     // ---- publishing what was built on the author's machine
     public List<(string FileName, byte[] Bytes)> StagedNupkgs { get; } = new();
@@ -134,6 +137,12 @@ public class FakeStoreClient : IStoreClient
         return Task.FromResult(new PublishedCard(staged.PackageId.ToLowerInvariant(), staged.PackageId,
             staged.Version, PublishedApproved, false));
     }
+}
+
+/** The version note a test wants under a result. */
+public class FakeUpdateCheck(string? note) : IUpdateCheck
+{
+    public Task<string?> Note() => Task.FromResult(note);
 }
 
 /** Sign-in as a test sees it: a token or none, and a browser login that either works or does not. */
