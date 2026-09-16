@@ -30,19 +30,17 @@ public class StoreTokenProvider : IStoreAuth
 
     /**
      * The browser flow needs no Direct Access Grants — that is the point of it — but it does need
-     * Standard Flow and a loopback redirect URI on the client.
+     * Standard Flow and the loopback redirect URIs on the client.
      *
-     * <para>Checked against the live realm on 2026-07-26: there is no `extension-store` client
-     * ("Client not found"), while `digital-twins` serves the sign-in page for a
-     * http://localhost:PORT/callback redirect, so this works today. It works because that client's
-     * valid redirect URIs are wildcard-permissive, which is somebody else's bug to fix — the moment
-     * it is tightened, the loopback URI has to be added explicitly or this breaks. The proper end
-     * state is a dedicated public client; when it exists, set ENCY_STORE_BROWSER_CLIENT_ID.</para>
+     * <para>The store's own public client `extension-store` exists since 2026-09-16: Standard Flow,
+     * PKCE S256 required, password grant off, the loopback callbacks from
+     * <see cref="BrowserLogin.LoopbackPorts"/> listed. So the browser flow runs on it, while the
+     * console password flow above stays on `digital-twins`, the only client that still takes a
+     * password. Before that date both borrowed `digital-twins`; a stored refresh token remembers
+     * which client minted it, so old sign-ins keep refreshing under the old one.</para>
      */
     private readonly string _browserClientId =
-        Environment.GetEnvironmentVariable("ENCY_STORE_BROWSER_CLIENT_ID")
-        ?? Environment.GetEnvironmentVariable("ENCY_STORE_CLIENT_ID")
-        ?? "digital-twins";
+        Environment.GetEnvironmentVariable("ENCY_STORE_BROWSER_CLIENT_ID") ?? "extension-store";
 
     private string? _cachedAccess;
     private DateTimeOffset _cachedUntil = DateTimeOffset.MinValue;

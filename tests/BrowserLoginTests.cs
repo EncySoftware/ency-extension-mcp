@@ -73,11 +73,10 @@ public class BrowserLoginTests
         Assert.Equal("no request url", BrowserLogin.Read(null).Error);
     }
 
+    /** The ports are half of a contract; the other half is the client's redirect list on Keycloak. */
     [Fact]
-    public void AFreeLoopbackPortIsUsable()
+    public void TheLoopbackPortsAreTheOnesRegisteredOnTheKeycloakClient()
     {
-        int port = BrowserLogin.FreeLoopbackPort();
-        Assert.InRange(port, 1024, 65535);
-        Assert.NotEqual(port, 0);
+        Assert.Equal(new[] { 43210, 43211, 43212 }, BrowserLogin.LoopbackPorts);
     }
 }

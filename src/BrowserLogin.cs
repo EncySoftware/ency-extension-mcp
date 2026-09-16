@@ -12,12 +12,15 @@ namespace EncyExtensionMcp;
  * <para>Three reasons it is the better door. The tool never sees the password. Whatever the account
  * needs — SSO, two-factor, a password manager — happens in the browser where it works, and a
  * password grant simply breaks the day two-factor is switched on. And it needs no Direct Access
- * Grants on the Keycloak client, which is the only reason this tool borrows the `digital-twins`
- * client today instead of using the store's own.</para>
+ * Grants on the Keycloak client, so it runs on the store's own client (`extension-store`, registered
+ * 2026-09-16), where the password grant is switched off on purpose.</para>
  *
- * <para>What it needs from Keycloak: Standard Flow enabled and <c>http://127.0.0.1:*∕callback</c>
- * among the client's valid redirect URIs. Until that is in place the page refuses with "Invalid
- * redirect uri", so {@code login --password} keeps the old console flow available.</para>
+ * <para>What it needs from Keycloak: Standard Flow, PKCE S256, and the loopback callbacks
+ * <c>http://localhost:PORT/callback</c> and <c>http://127.0.0.1:PORT/callback</c> for every port in
+ * <see cref="LoopbackPorts"/> among the client's valid redirect URIs. Keycloak takes no wildcard
+ * in the port, so the ports are fixed and listed on both sides: change them here and the client
+ * has to change with them. A port the client does not list makes the page refuse with "Invalid
+ * redirect uri", and {@code login --password} keeps the old console flow available.</para>
  */
 public static class BrowserLogin
 {
@@ -60,15 +63,14 @@ public static class BrowserLogin
             q.Select(kv => Uri.EscapeDataString(kv.Key) + "=" + Uri.EscapeDataString(kv.Value)));
     }
 
-    /// <summary>A loopback port nobody is using. Asking for port 0 lets the OS pick.</summary>
-    public static int FreeLoopbackPort()
-    {
-        var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
-    }
+    /**
+     * Where the browser is sent back to. Fixed, not "any free port": Keycloak matches redirect URIs
+     * literally (a wildcard is allowed only at the end of the address, never in the port), so the
+     * client on the server lists exactly these. Three of them, so that one busy port does not block
+     * the sign-in; chosen away from anything well known and below the range Windows hands out to
+     * outgoing connections. Registered on the client on 2026-09-16.
+     */
+    public static readonly int[] LoopbackPorts = { 43210, 43211, 43212 };
 
     private static string Base64Url(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -93,23 +95,27 @@ public static class BrowserLogin
                                             HttpClient http)
     {
         string verifier = NewVerifier(), state = NewVerifier();
-        int port = FreeLoopbackPort();
-
-        // "localhost" first: on Windows HttpListener may bind it without elevation, while a literal
-        // 127.0.0.1 prefix often needs a netsh URL reservation. Whichever binds decides the
-        // redirect_uri, because it has to be the exact string sent to the authorize endpoint.
+        // Ports in the registered order; "localhost" first on each: on Windows HttpListener may bind
+        // it without elevation, while a literal 127.0.0.1 prefix often needs a netsh URL reservation.
+        // Whichever binds decides the redirect_uri, because it has to be the exact string sent to
+        // the authorize endpoint.
         using var listener = new HttpListener();
         string? redirectUri = null;
-        foreach (var host in new[] { "localhost", "127.0.0.1" })
+        foreach (int port in LoopbackPorts)
         {
-            listener.Prefixes.Clear();
-            listener.Prefixes.Add($"http://{host}:{port}/callback/");
-            try { listener.Start(); redirectUri = $"http://{host}:{port}/callback"; break; }
-            catch (HttpListenerException) { /* try the other spelling */ }
+            foreach (var host in new[] { "localhost", "127.0.0.1" })
+            {
+                listener.Prefixes.Clear();
+                listener.Prefixes.Add($"http://{host}:{port}/callback/");
+                try { listener.Start(); redirectUri = $"http://{host}:{port}/callback"; break; }
+                catch (HttpListenerException) { /* try the other spelling, then the next port */ }
+            }
+            if (redirectUri != null) break;
         }
         if (redirectUri == null)
         {
-            write($"Could not listen on port {port} — run `ency-extension-mcp login --password` instead.");
+            write($"Ports {LoopbackPorts[0]}-{LoopbackPorts[^1]} are all busy on this machine - free one of them, "
+                + "or run `ency-extension-mcp login --password` instead.");
             return null;
         }
 
@@ -164,8 +170,8 @@ public static class BrowserLogin
         {
             write("Gave up waiting for the browser.");
             write("If the page refused the address as an invalid redirect URI, the store's Keycloak "
-                  + "client does not allow http://127.0.0.1 yet — run `ency-extension-mcp login "
-                  + "--password` for now and ask the store team to allow it.");
+                  + $"client does not list http://localhost:{LoopbackPorts[0]}-{LoopbackPorts[^1]}/callback - "
+                  + "run `ency-extension-mcp login --password` for now and tell the store team.");
             return null;
         }
         return await incoming;
