@@ -1,0 +1,28 @@
+# Live, read-only checks against the production store and its Keycloak: the answer shapes this
+# tool parses and the sign-in contract it relies on (tests/SmokeTests.cs).
+#
+# The unit tests run against fakes and cannot notice the day the server changes an answer — so far
+# an extension author noticed instead. This runs every Monday, on every release tag, and by hand.
+name: smoke
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet test tests/EncyExtensionMcp.Tests.csproj -c Release --nologo --filter "Category=Smoke"
+        env:
+          ENCY_SMOKE: '1'
