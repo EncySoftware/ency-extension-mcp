@@ -69,6 +69,24 @@ public class LocalPublishToolTests
         Assert.DoesNotContain("ERROR", answer);
     }
 
+    /** Symbols and the compiler's doc file serve nobody after the build; an XML with another name is a resource and goes. */
+    [Fact]
+    public async Task Symbols_and_doc_files_stay_home()
+    {
+        var store = new FakeStoreClient();
+        string dir = TempDir();
+        foreach (var f in new[] { "MyExt.dll", "MyExt.pdb", "MyExt.xml", "MyExt.settings.json", "package.info.json", "tools.xml" })
+            File.WriteAllText(Path.Combine(dir, f), "x");
+
+        await Tools(store).PublishPackage(dir);
+
+        var sent = store.UploadedFiles.Select(f => f.FileName).ToArray();
+        Assert.DoesNotContain("MyExt.pdb", sent);
+        Assert.DoesNotContain("MyExt.xml", sent);
+        Assert.Contains("tools.xml", sent);
+        Assert.Contains("MyExt.dll", sent);
+    }
+
     /** A build folder has a required minimum; without it the refusal comes BEFORE the upload. */
     [Fact]
     public async Task A_folder_without_a_manifest_is_refused_before_anything_is_uploaded()

@@ -127,10 +127,20 @@ public class LocalPublishTools
      * runtime dll in it is not what it wants (a known trap of its own; see the `folder` input of
      * the GitHub action).
      */
-    private static List<string> BuildOutput(string dir) =>
-        Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly)
+    private static List<string> BuildOutput(string dir)
+    {
+        var all = Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly).ToList();
+        // Symbols and the compiler's XML doc files ride along with every build and serve nobody at
+        // run time; the doc file is told from a real XML resource by the assembly standing next to it.
+        var assemblies = all.Where(f => f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            .Select(f => Path.GetFileNameWithoutExtension(f)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return all
             .Where(f => !f.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !f.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !(f.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
+                          && assemblies.Contains(Path.GetFileNameWithoutExtension(f))))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
     /** The refusal before the upload: what the store would say, without the round trip. */
     private static string? WhatIsMissing(List<string> files)

@@ -220,6 +220,12 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             }
             catch (FileNotFoundException e) { return $"ERROR: {e.Message}"; }
         }
+        // Said out loud rather than refused: a card without a category is not broken, it sits under
+        // "other" until somebody sorts it — and the next publish with a category fills the gap, because
+        // the store's hint only ever fills an EMPTY category. But it used to happen in silence, and
+        // half the catalogue ended up unsorted that way (11 of 23 on 16.09.2026).
+        else if (UnsortedNote(PackageInfo.ReadCategory(dir)) is { } unsorted)
+            categoryNote = unsorted + " Known: " + string.Join(", ", (await store.GetCategories()).Select(k => k.Id));
 
         var existing = await proc.Run("git", $"rev-parse -q --verify refs/tags/{tag}", dir);
         if (existing.Ok)
@@ -243,6 +249,13 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             Call publish_status to follow it to the store card.
             """;
     }
+
+    /** The note for a manifest that names no category (or the default one); null when it does. */
+    public static string? UnsortedNote(string? manifestCategory) =>
+        string.IsNullOrWhiteSpace(manifestCategory) || manifestCategory.Trim().Equals("other", StringComparison.OrdinalIgnoreCase)
+            ? "src/package.info.json names no category, so the card shows under 'other' until one is set — "
+              + "pass category=<id> on the next publish or set it on the card page."
+            : null;
 
     // ---------------------------------------------------------------- publish_status
 

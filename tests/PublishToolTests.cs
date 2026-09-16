@@ -43,6 +43,53 @@ public class PublishToolTests
         Assert.Contains(proc.Calls, c => c == "git push origin v1.0.0");
     }
 
+    /** A publish without a category is not refused, but the tool says where the card will land and what to pass. */
+    [Fact]
+    public async Task SaysSoWhenTheManifestNamesNoCategory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcp-cat-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        File.WriteAllText(Path.Combine(dir, "src", "package.info.json"), "{\n  \"packageId\": \"MyExt\"\n}\n");
+        var proc = HappyPathPush();
+
+        var res = await Tools(proc).PublishExtension("1.0.0", repoDir: dir);
+
+        Assert.DoesNotContain("ERROR", res);
+        Assert.Contains("names no category", res);
+        Assert.Contains("analyzer", res);                       // the store's list, so the next call can be exact
+        Assert.Contains(proc.Calls, c => c == "git tag v1.0.0"); // and the publish itself went ahead
+    }
+
+    [Fact]
+    public async Task KeepsQuietWhenTheManifestHasACategory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcp-cat-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        File.WriteAllText(Path.Combine(dir, "src", "package.info.json"), "{\n  \"packageId\": \"MyExt\",\n  \"category\": \"analyzer\"\n}\n");
+
+        var res = await Tools(HappyPathPush()).PublishExtension("1.0.0", repoDir: dir);
+
+        Assert.DoesNotContain("ERROR", res);
+        Assert.DoesNotContain("names no category", res);
+    }
+
+    [Fact]
+    public void TheDefaultCategoryCountsAsUnsorted()
+    {
+        Assert.NotNull(ExtensionStoreTools.UnsortedNote(null));
+        Assert.NotNull(ExtensionStoreTools.UnsortedNote(" "));
+        Assert.NotNull(ExtensionStoreTools.UnsortedNote("Other"));
+        Assert.Null(ExtensionStoreTools.UnsortedNote("operation"));
+    }
+
+    private static FakeProcessRunner HappyPathPush() => new FakeProcessRunner()
+        .On("git status --porcelain", stdout: "")
+        .On("git rev-parse", exit: 1)
+        .On("git tag")
+        .On("git push origin HEAD")
+        .On("git push origin v1.0.0")
+        .On("gh run list", stdout: "[]");
+
     [Fact]
     public async Task RefusesExistingTag()
     {
