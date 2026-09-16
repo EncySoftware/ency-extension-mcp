@@ -73,6 +73,27 @@ It publishes under the author's own store account (the same browser sign-in as e
 new name waits for a moderator once; a new version of an extension already in the catalogue appears
 at once.
 
+`check_package [path]` (or `ency-extension-mcp check-package`) reads a ready `.nupkg` before any of
+that, with no sign-in and nothing uploaded: the `ency-extension` tag the catalogue needs, the
+manifest and assembly the store requires, the `category:` tag, screenshots, readme, icon, and whether
+the SDK it was built against has shipped in a released ENCY. `publish_package` runs the same checks
+first, so a package the store would refuse never opens the browser; the rest come back as notes under
+the result. For a source folder the counterpart is `check_extension`.
+
+## When something is off
+
+- `doctor` (or `ency-extension-mcp doctor`) — the machine in six lines: the tool's version and whether
+  nuget.org has a newer one, the .NET SDK, git and gh (and which routes need them), whether the store
+  answers, who is signed in and through which Keycloak client, and whether Cursor lists the server.
+  Each gap comes with the command that fixes it. Call it first when a publish fails for no clear reason.
+- `my_extensions` (or `ency-extension-mcp my-extensions`) — every card of the signed-in author, what
+  needs attention first: a failing build with its step and run link, a rejected card with the
+  moderator's reason, one waiting for a moderator; then the live ones with their links, then the hidden.
+- `ency-extension-mcp version` — what is running. The tool asks nuget.org once a day, and when a newer
+  version exists every publish result ends with the update command
+  (`dotnet tool update -g EncySoftware.ExtensionStoreMcp --no-cache` — the `--no-cache` because the
+  package index lags a fresh release by up to an hour).
+
 ## Publishing without a console
 
 Without the tool, the same route is the store page — and somebody who is not a developer should be
@@ -173,6 +194,9 @@ Doing it by hand instead of `setup` means `ency-extension-mcp login` plus this i
 ```bash
 dotnet test tests/EncyExtensionMcp.Tests.csproj   # logic tests (processes faked)
 dotnet run --project src                           # stdio server (speak JSON-RPC to it)
+ENCY_SMOKE=1 dotnet test tests/EncyExtensionMcp.Tests.csproj --filter Category=Smoke
+                                                   # live, read-only: the store's answer shapes and
+                                                   # the Keycloak sign-in contract (CI runs it weekly)
 ```
 
 The extension-type guides in `guides/` are the single source of truth: they are embedded into the
