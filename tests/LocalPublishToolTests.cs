@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using System.Text;
 using EncyExtensionMcp;
 using Xunit;
 
@@ -29,6 +31,88 @@ public class LocalPublishToolTests
         string path = Path.Combine(dir, name);
         File.WriteAllBytes(path, new byte[] { 0x50, 0x4B, 3, 4, 9 });   // the store parses the content, not the tool
         return path;
+    }
+
+    /** A real archive, laid out the way the ENCY pack tool does it, with the knobs a test needs. */
+    private static string WriteRealNupkg(string dir, bool marker = true, int screenshots = 1)
+    {
+        string path = Path.Combine(dir, "MyExt.0.1.0.nupkg");
+        using var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            void Add(string name, string text)
+            {
+                using var s = zip.CreateEntry(name).Open();
+                var bytes = Encoding.UTF8.GetBytes(text);
+                s.Write(bytes, 0, bytes.Length);
+            }
+            Add("MyExt.nuspec", "<package><metadata><id>MyExt</id><version>0.1.0</version><tags>"
+                                + (marker ? "ency-extension " : "") + "category:analyzer</tags></metadata></package>");
+            Add("build/MyExt.settings.json", "{}");
+            Add("lib/net8.0/MyExt.dll", "MZ");
+            Add("build/readme.md", "# MyExt");
+            Add("build/icon.png", "png");
+            Add("build/package.info.json", "{\"sdkVersion\":\"3.0.6\"}");
+            for (int i = 0; i < screenshots; i++) Add($"build/screenshots/s{i}.png", "png");
+        }
+        File.WriteAllBytes(path, ms.ToArray());
+        return path;
+    }
+
+    /** Read before the sign-in: a package the store would refuse never asks the author to log in. */
+    [Fact]
+    public async Task A_package_the_store_would_refuse_is_stopped_before_the_sign_in()
+    {
+        var store = new FakeStoreClient();
+        var auth = new FakeStoreAuth { Token = null };
+        string nupkg = WriteRealNupkg(TempDir(), marker: false);
+
+        string answer = await Tools(store, auth).PublishPackage(nupkg);
+
+        Assert.StartsWith("ERROR", answer);
+        Assert.Contains("ency-extension", answer);
+        Assert.Equal(0, auth.LoginCalls);
+        Assert.Empty(store.StagedNupkgs);
+    }
+
+    /** What only a bare card would have shown is said in the publish result, and the publish goes ahead. */
+    [Fact]
+    public async Task A_package_without_pictures_is_published_with_a_note()
+    {
+        var store = new FakeStoreClient();
+        string nupkg = WriteRealNupkg(TempDir(), screenshots: 0);
+
+        string answer = await Tools(store).PublishPackage(nupkg);
+
+        Assert.DoesNotContain("ERROR", answer);
+        Assert.Contains("- check: no screenshots", answer);
+        Assert.Single(store.Published);
+    }
+
+    [Fact]
+    public async Task Check_package_reads_the_archive_and_touches_nothing()
+    {
+        var store = new FakeStoreClient();
+        var auth = new FakeStoreAuth { Token = null };
+        string dir = TempDir();
+        WriteRealNupkg(dir, marker: false, screenshots: 0);
+
+        string answer = await Tools(store, auth).CheckPackage(dir);
+
+        Assert.StartsWith("MyExt 0.1.0 (MyExt.0.1.0.nupkg)", answer);
+        Assert.Contains("STOPS THE PUBLISH: no `ency-extension` tag", answer);
+        Assert.Contains("no screenshots", answer);
+        Assert.Equal(0, auth.LoginCalls);
+        Assert.Empty(store.StagedNupkgs);
+        Assert.Empty(store.Published);
+    }
+
+    [Fact]
+    public async Task Check_package_points_a_source_folder_at_check_extension()
+    {
+        string answer = await Tools(new FakeStoreClient()).CheckPackage(TempDir());
+        Assert.StartsWith("ERROR", answer);
+        Assert.Contains("check_extension", answer);
     }
 
     [Fact]

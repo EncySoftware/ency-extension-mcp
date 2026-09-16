@@ -92,6 +92,16 @@ if (args.Length > 0 && args[0].Equals("publish-package", StringComparison.Ordina
     return result.StartsWith("ERROR") ? 1 : 0;
 }
 
+// `ency-extension-mcp check-package [path]` — the MCP tool check_package for a terminal: what a ready
+// .nupkg is missing, before anything is uploaded.
+if (args.Length > 0 && args[0].Equals("check-package", StringComparison.OrdinalIgnoreCase))
+{
+    var tools = new LocalPublishTools(new StoreClient(), new StoreTokenProvider(), Console.Error.WriteLine);
+    string result = await tools.CheckPackage(args.Skip(1).FirstOrDefault(a => !a.StartsWith("--")));
+    Console.WriteLine(result);
+    return result.StartsWith("ERROR") ? 1 : 0;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // stdout carries the MCP protocol — all logging must go to stderr.

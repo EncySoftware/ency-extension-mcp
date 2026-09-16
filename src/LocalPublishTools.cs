@@ -60,7 +60,19 @@ public class LocalPublishTools
         if (isFile && !full.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase))
             return $"ERROR: {Path.GetFileName(full)} is not a .nupkg — give the package, or the folder with the build output.";
 
+        // Read locally first: what the store would refuse is said before the sign-in and the upload,
+        // and what only a bare card would have shown (no pictures, no readme) is said at all. The SDK
+        // is left to the server below — it holds the release map, and one warning is enough.
+        IReadOnlyList<Finding> checks = Array.Empty<Finding>();
+        if (nupkg != null && PackageCheck.TryRead(nupkg) is { } facts)
+        {
+            checks = PackageCheck.Findings(facts, await CategoriesOrNone(), recommendedSdk: null);
+            if (checks.Any(f => f.Blocking))
+                return "ERROR: " + string.Join(" ", checks.Where(f => f.Blocking).Select(f => f.Text));
+        }
+
         var sb = new StringBuilder();
+        foreach (var f in checks) sb.AppendLine("- check: " + f.Text);
         string? token = await TokenOrBrowserLogin(sb);
         if (token == null)
             return "ERROR: not signed in to the store. The browser sign-in did not complete — ask the author to "
@@ -114,6 +126,46 @@ public class LocalPublishTools
             ? $"- in the catalogue: {store.StoreBaseUrl}/extension/{card.Slug}"
             : $"- waiting for a moderator; the card already opens by its link: {store.StoreBaseUrl}/extension/{card.Slug}");
         return sb.ToString().TrimEnd();
+    }
+
+    [McpServerTool(Name = "check_package"), Description(
+        "Check a ready .nupkg before publishing, without signing in or uploading anything: the marker " +
+        "tag the catalogue needs, the manifest and assembly the store requires, the category tag, " +
+        "screenshots, readme, icon, and whether the SDK it was built against has shipped in a released " +
+        "ENCY. publish_package runs the same checks and refuses on the ones the store would refuse too. " +
+        "For a source folder use check_extension instead.")]
+    public async Task<string> CheckPackage(
+        [Description("A .nupkg file, or the folder holding it (the newest one is taken). Default: current directory")] string? path = null)
+    {
+        string full = Path.GetFullPath(path ?? ".");
+        string? nupkg = File.Exists(full) ? full : Directory.Exists(full) ? NewestNupkg(full) : null;
+        if (nupkg == null)
+            return Directory.Exists(full)
+                ? $"ERROR: no .nupkg in {full} — build the package first, or use check_extension for a source folder."
+                : $"ERROR: there is no file or folder at {full}.";
+        if (!nupkg.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase))
+            return $"ERROR: {Path.GetFileName(nupkg)} is not a .nupkg.";
+        var facts = PackageCheck.TryRead(nupkg);
+        if (facts == null) return $"ERROR: {Path.GetFileName(nupkg)} is not a valid package — not a zip archive.";
+
+        var findings = PackageCheck.Findings(facts, await CategoriesOrNone(), await RecommendedSdkOrNull());
+        string head = $"{facts.PackageId ?? "?"} {facts.Version ?? "?"} ({Path.GetFileName(nupkg)})";
+        if (findings.Count == 0) return head + ": nothing to fix before publishing.";
+        return head + " — before publishing:" + Environment.NewLine + string.Join(Environment.NewLine,
+            findings.Select(f => (f.Blocking ? "  - STOPS THE PUBLISH: " : "  - ") + f.Text));
+    }
+
+    /** The store's categories, or none when it cannot be asked — a local check must not fail on the network. */
+    private async Task<IReadOnlyList<StoreCategory>> CategoriesOrNone()
+    {
+        try { return await store.GetCategories(); }
+        catch (Exception e) { log($"could not read the store's categories ({e.Message})"); return Array.Empty<StoreCategory>(); }
+    }
+
+    private async Task<string?> RecommendedSdkOrNull()
+    {
+        try { return await store.GetRecommendedSdk(); }
+        catch (Exception e) { log($"could not ask the store which SDK has shipped ({e.Message})"); return null; }
     }
 
     /** The newest top-level .nupkg in the folder; null when there is none. */
