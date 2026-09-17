@@ -157,22 +157,28 @@ public class FolderPublishTools
     // pin, the workflow and the rules. The author's own code is neither read nor changed.
     [McpServerTool(Name = "update_extension"), Description(
         "Bring an existing extension in line with the current template: fix the SDK pin when it " +
-        "points at a version no released application carries, and refresh what the template owns - " +
-        "the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed. " +
-        "Touches nothing under src/ - the author's own code is neither read nor changed.")]
+        "points at a version no released application carries, refresh what the template owns - " +
+        "the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed, " +
+        "Directory.Build.props/targets - and, for a project not made from the template, write " +
+        "package.info.json from its csproj with the store's marker tag. The author's own code is " +
+        "neither read nor changed.")]
     public async Task<string> UpdateExtension(
         [Description("The extension folder. Default: current directory")] string? folder = null)
     {
         string root = Path.GetFullPath(folder ?? Directory.GetCurrentDirectory());
         if (!Directory.Exists(root)) return $"ERROR: no such folder: {root}";
 
-        string? infoPath = Directory.EnumerateFiles(root, "package.info.json", SearchOption.AllDirectories)
+        // The manifest is looked for next to the project first: a project not made from the
+        // template has none yet, and this tool is where it gets one.
+        var changed = new List<string>();
+        var project = ProjectLayout.Locate(root, out var layoutError);
+        if (project != null) ProjectLayout.Adopt(project, changed);
+        string? infoPath = project?.Manifest ?? Directory.EnumerateFiles(root, "package.info.json", SearchOption.AllDirectories)
             .FirstOrDefault(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
                               && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
-        if (infoPath == null) return $"ERROR: {"package.info.json"} not found under {root} - is this an extension folder?";
-        string? csprojPath = Directory.EnumerateFiles(Path.GetDirectoryName(infoPath)!, "*.csproj").FirstOrDefault();
-
-        var changed = await FixSdkPin(infoPath, csprojPath);
+        if (infoPath == null) return "ERROR: " + (layoutError ?? $"no extension project under {root} — neither a csproj nor a package.info.json.");
+        string? csprojPath = project?.Csproj ?? Directory.EnumerateFiles(Path.GetDirectoryName(infoPath)!, "*.csproj").FirstOrDefault();
+        changed.AddRange(await FixSdkPin(infoPath, csprojPath));
 
         // These files belong to the template whole, so they are taken as they are - the checks an
         // older repository has never seen live in them.
@@ -213,6 +219,9 @@ public class FolderPublishTools
     private static readonly string[] TemplateOwned =
     {
         ".github/workflows/publish.yml", "AGENTS.md", "nuget.config", ".mcp.json", ".cursor/mcp.json",
+        // The flat output and the PackReady target the workflow builds with, for any csproj under
+        // the repository (17.09.2026) — a repository made before that has them in its csproj only.
+        "Directory.Build.props", "Directory.Build.targets",
     };
 
     private static bool SameText(string a, string b) => a.Replace("\r\n", "\n") == b.Replace("\r\n", "\n");
@@ -324,7 +333,9 @@ public class FolderPublishTools
 
     [McpServerTool(Name = "publish_folder"), Description(
         "Publish an ENCY extension from a local folder with NO git and NO gh on this machine — the " +
-        "preferred way to publish. The store creates the repository in the author's GitHub account " +
+        "preferred way to publish. The project need not come from the template: a missing " +
+        "package.info.json is written from the csproj and the store's marker tag added. " +
+        "The store creates the repository in the author's GitHub account " +
         "(through the store's GitHub App), commits the folder into src/, runs the GitHub build and " +
         "publishes. The author is needed twice, in the browser only: the ENCY store sign-in and, once, " +
         "the app's consent page — this tool opens both and waits; nothing is asked in a terminal. " +
@@ -342,6 +353,12 @@ public class FolderPublishTools
         FolderPlan plan;
         try { plan = FolderPlanner.Plan(Path.GetFullPath(folder ?? ".")); }
         catch (FolderPlanException e) { return "ERROR: " + e.Message; }
+        // A project that was not made from the template: the manifest is written from its csproj
+        // and the marker tag added, before the folder is read for upload — so what goes to the
+        // repository is already what the workflow can build and the store can pack.
+        var adopted = new List<string>();
+        ProjectLayout.Adopt(new Project(plan.Root, Path.Combine(plan.Root, plan.Project)), adopted);
+        if (adopted.Count > 0) plan = FolderPlanner.Plan(plan.Root);
         log($"{name}: {plan.Files.Count} files from {plan.Root} ({plan.Bytes / 1024} KB)");
 
         var checks = await Inspect(plan.Root, name);
@@ -349,6 +366,7 @@ public class FolderPublishTools
             return "ERROR: " + string.Join(" ", checks.Where(f => f.Blocking).Select(f => f.Text));
 
         var sb = new StringBuilder();
+        foreach (var a in adopted) sb.AppendLine("- adopted: " + a);
         foreach (var f in checks) sb.AppendLine("- check: " + f.Text);
 
         // The pin is brought in line HERE, not only when somebody remembers to ask for it: an assistant

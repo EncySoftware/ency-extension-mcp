@@ -94,6 +94,18 @@ the result. For a source folder the counterpart is `check_extension`.
   (`dotnet tool update -g EncySoftware.ExtensionStoreMcp --no-cache` — the `--no-cache` because the
   package index lags a fresh release by up to an hour).
 
+## Already have a project that was not made from the template?
+
+Keep it as it is. Every publish route takes a project of its own: `publish_folder` and
+`publish_extension` find the csproj under `src/`, `publish_package` finds it above the build output.
+A missing `package.info.json` is written from the csproj (name, version, SDK pin, the
+`ency-extension` tag) and the answer says so; an existing one gets the tag. The template's
+`Directory.Build.props` / `Directory.Build.targets` give any csproj under the repository the flat
+output and the `PackReady` target the workflow builds with, so the author's own csproj needs no edit
+(`update_extension` brings those two files into a repository made earlier). The one thing the tool
+cannot write is `<Name>.settings.json` — the extension's manifest of entry points, without which
+ENCY registers nothing; the template has a sample.
+
 ## Publishing without a console
 
 Without the tool, the same route is the store page — and somebody who is not a developer should be

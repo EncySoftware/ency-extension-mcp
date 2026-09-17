@@ -40,6 +40,33 @@ public class LocalPublishTools
         return note == null ? text : text.TrimEnd() + "\n\n" + note;
     }
 
+    /**
+     * Give a build-output folder the manifest the store's packer needs. When the output carries a
+     * manifest with the marker, nothing happens. Otherwise the project is looked for above the
+     * folder; its manifest is written or given the marker, and replaces (or joins) the output's copy
+     * in the upload. Returns the reason when it cannot be done.
+     */
+    private static string? AdoptOutput(string outputDir, List<string> files, StringBuilder sb)
+    {
+        int at = files.FindIndex(f => Path.GetFileName(f).Equals("package.info.json", StringComparison.OrdinalIgnoreCase));
+        if (at >= 0 && ProjectLayout.HasMarker(File.ReadAllText(files[at]))) return null;
+
+        var project = ProjectLayout.LocateAbove(outputDir);
+        if (project == null)
+            return at < 0
+                ? "no package.info.json in the build output and no csproj above it — the store cannot make a package without the manifest. "
+                  + "Point at the build output of the project (bin/Release/<tfm>), or write src/package.info.json (see the template)."
+                : null;   // a manifest without the marker still packs: the store stamps the marker itself
+
+        var notes = new List<string>();
+        ProjectLayout.Adopt(project, notes);
+        if (notes.Count == 0) return null;
+        foreach (var n in notes) sb.AppendLine("- adopted: " + n);
+        // The project's manifest is the one that goes up: the output's copy, if any, predates the edit.
+        if (at >= 0) files[at] = project.Manifest; else files.Add(project.Manifest);
+        return null;
+    }
+
     /** What the store's packer needs in a build folder: the extension's manifest and its assembly. */
     private const string ManifestSuffix = ".settings.json";
 
@@ -101,6 +128,13 @@ public class LocalPublishTools
                 var files = BuildOutput(full);
                 string? missing = WhatIsMissing(files);
                 if (missing != null) return "ERROR: " + missing;
+
+                // The output of a project not made from the template: no package.info.json in it,
+                // or one without the marker. The csproj is a few folders up; the manifest is written
+                // next to it (that is where it belongs, and where the next build copies it from) and
+                // rides along with this upload.
+                string? adoptError = AdoptOutput(full, files, sb);
+                if (adoptError != null) return "ERROR: " + adoptError;
 
                 sb.AppendLine($"- build output: {files.Count} files from {full}");
                 var ids = new List<string>();

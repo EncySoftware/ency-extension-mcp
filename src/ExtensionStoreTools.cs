@@ -159,7 +159,9 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
 
     [McpServerTool(Name = "publish_extension"), Description(
         "Publish the extension to the ENCY store: tags the repo vX.Y.Z and pushes — GitHub Actions " +
-        "builds, packs and publishes. New extensions land hidden until a store moderator approves. " +
+        "builds, packs and publishes. The project under src/ need not come from the template: a missing " +
+        "package.info.json is written from the csproj and the store's marker tag added, committed " +
+        "before the tag. New extensions land hidden until a store moderator approves. " +
         "Requires a clean working tree unless commitAll is true.")]
     public async Task<string> PublishExtension(
         [Description("Version to publish, semver: 1.2.3. Leave empty for the next patch after the "
@@ -194,6 +196,27 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
             await proc.Run("git", "add -A", dir);
             var c = await proc.Run("git", $"commit -m \"Release {tag}\"", dir);
             if (!c.Ok) return $"ERROR: commit failed:\n{c.Output.Trim()}";
+        }
+
+        // The workflow builds src/ — that is the one thing about the layout it insists on. What it
+        // does NOT insist on any more is the template's csproj: the manifest is written from the
+        // author's own project when missing, and the marker tag added, so a project brought from
+        // elsewhere publishes as it is. After the clean-tree check, and committed, for the same
+        // reason the category is: a refused publish must not leave an edit behind.
+        var project = ProjectLayout.Locate(dir, out var layoutError);
+        if (layoutError != null) return "ERROR: " + layoutError;
+        if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
+            return $"ERROR: the project is at {project.Dir}, but the publish workflow builds src/ — move it under src/ "
+                 + "(or publish this build with publish_package, which takes any folder).";
+        var adopted = new List<string>();
+        if (project != null) ProjectLayout.Adopt(project, adopted);
+        string? adoptNote = null;
+        if (adopted.Count > 0)
+        {
+            await proc.Run("git", "add src/package.info.json", dir);
+            var ac = await proc.Run("git", "commit -m \"Add the store manifest\"", dir);
+            if (!ac.Ok) return $"ERROR: could not commit package.info.json:\n{ac.Output.Trim()}";
+            adoptNote = string.Join("; ", adopted) + " (committed)";
         }
 
         // The category is a field in the manifest, not a flag on this call: a tag push carries only a
@@ -243,7 +266,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         var run = await LatestRun(dir);
 
         return await WithUpdateNote($"""
-            Pushed {tag} — GitHub Actions is building and publishing.{(categoryNote != null ? " " + categoryNote + "." : "")}
+            Pushed {tag} — GitHub Actions is building and publishing.{(adoptNote != null ? " " + adoptNote + "." : "")}{(categoryNote != null ? " " + categoryNote + "." : "")}
             {(chosenNote != null ? chosenNote + "\n" : "")}
             {(run != null ? $"workflow run: {run.Value.Url} ({run.Value.Status})" : "the workflow run has not registered yet")}
 
