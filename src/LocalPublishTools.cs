@@ -165,6 +165,10 @@ public class LocalPublishTools
         catch (StoreApiException e) { return $"ERROR: the store refused to publish ({e.Status}): {e.Message}"; }
 
         sb.AppendLine($"- published {card.PackageId} {card.LatestVersion ?? staged.Version}");
+        // Accepted, with something to say about it — a Schedule A declaration still unanswered, for
+        // one. The store sends these as headers, where nobody would ever meet them.
+        foreach (var note in card.Warnings ?? Array.Empty<string>())
+            sb.AppendLine("- note from the store: " + note);
         sb.AppendLine(card.Approved
             ? $"- in the catalogue: {store.StoreBaseUrl}/extension/{card.Slug}"
             : $"- waiting for a moderator; the card already opens by its link: {store.StoreBaseUrl}/extension/{card.Slug}");
@@ -174,8 +178,9 @@ public class LocalPublishTools
     [McpServerTool(Name = "check_package"), Description(
         "Check a ready .nupkg before publishing, without signing in or uploading anything: the marker " +
         "tag the catalogue needs, the manifest and assembly the store requires, the category tag, " +
-        "screenshots, readme, icon, and whether the SDK it was built against has shipped in a released " +
-        "ENCY. publish_package runs the same checks and refuses on the ones the store would refuse too. " +
+        "screenshots, readme, icon, whether the SDK it was built against has shipped in a released " +
+        "ENCY, and the Schedule A declaration the store asks of every submission. publish_package " +
+        "runs the same checks and refuses on the ones the store would refuse too. " +
         "For a source folder use check_extension instead.")]
     public async Task<string> CheckPackage(
         [Description("A .nupkg file, or the folder holding it (the newest one is taken). Default: current directory")] string? path = null)

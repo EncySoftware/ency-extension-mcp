@@ -103,7 +103,17 @@ public static class ProjectLayout
         sb.Append("  \"author\": \"\",\n");
         sb.Append("  \"category\": \"other\",\n");
         sb.Append($"  \"tags\": \"{PackageCheck.MarkerTag}\",\n");
-        sb.Append("  \"requiresRestart\": false\n");
+        sb.Append("  \"requiresRestart\": false,\n");
+        // The Schedule A block, empty: every submission declares whether the extension works in a
+        // Reserved Functionality Domain, and the answer is the author's to give. Written unanswered
+        // so the shape is in front of them — filling it in here would put words in their mouth.
+        sb.Append($"  \"{ScheduleA.Key}\": {{\n");
+        sb.Append($"    \"see\": \"{ScheduleA.Url}\",\n");
+        sb.Append("    \"none\": false,\n");
+        sb.Append("    \"domain\": \"\",\n");
+        sb.Append("    \"entitlement\": \"\",\n");
+        sb.Append("    \"confirmations\": []\n");
+        sb.Append("  }\n");
         sb.Append("}\n");
         return sb.ToString();
     }

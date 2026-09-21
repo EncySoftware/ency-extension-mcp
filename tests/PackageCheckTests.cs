@@ -13,8 +13,12 @@ public class PackageCheckTests
     private static readonly StoreCategory[] Known = { new("other", "Other"), new("analyzer", "Analyzer"), new("operation", "Operation") };
 
     /** A package as the ENCY pack tool lays it out; callers strip what they want missing. */
+    /** An answered declaration, as a package ready to publish carries it (legal brief of 18.09.2026). */
+    private const string ScheduleABlock = ""","reservedFunctionality":{"none":true,"confirmations":["4.2","4.9","4.6"]}""";
+
     private static MemoryStream Nupkg(string tags = "ency-extension category:analyzer", bool manifest = true, bool dll = true,
-                                      bool readme = true, bool icon = true, int screenshots = 2, string? sdk = "3.0.6")
+                                      bool readme = true, bool icon = true, int screenshots = 2, string? sdk = "3.0.6",
+                                      bool declared = true)
     {
         var ms = new MemoryStream();
         using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
@@ -30,7 +34,8 @@ public class PackageCheckTests
             if (readme) Add(zip, "build/readme.md", "# MyExt");
             if (icon) Add(zip, "build/icon.png", "png");
             for (int i = 0; i < screenshots; i++) Add(zip, $"build/screenshots/shot{i}.png", "png");
-            if (sdk != null) Add(zip, "build/package.info.json", $"{{\"packageId\":\"MyExt\",\"sdkVersion\":\"{sdk}\"}}");
+            if (sdk != null) Add(zip, "build/package.info.json",
+                $$"""{"packageId":"MyExt","sdkVersion":"{{sdk}}"{{(declared ? ScheduleABlock : "")}}}""");
         }
         ms.Position = 0;
         return ms;
@@ -50,6 +55,19 @@ public class PackageCheckTests
         Assert.Equal(("MyExt", "0.1.0", true, "analyzer"), (f.PackageId, f.Version, f.HasMarker, f.CategoryTag));
         Assert.Equal(2, f.Screenshots);
         Assert.Empty(PackageCheck.Findings(f, Known, "3.0.6"));
+    }
+
+    /** The store reads the Schedule A declaration out of the package; so does this, before the upload. */
+    [Fact]
+    public void A_package_that_declares_nothing_under_Schedule_A_is_told_so()
+    {
+        var f = PackageCheck.Read(Nupkg(declared: false));
+        Assert.Null(f.Declaration);
+        var note = Assert.Single(PackageCheck.Findings(f, Known, "3.0.6", new DateOnly(2026, 10, 15))
+                                             .Where(x => x.Text.Contains("reservedFunctionality")));
+        Assert.False(note.Blocking, "before the documents take effect the store publishes it with a warning");
+
+        Assert.True(PackageCheck.Read(Nupkg()).Declaration!.None);
     }
 
     [Fact]

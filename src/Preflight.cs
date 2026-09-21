@@ -80,6 +80,10 @@ public static class Preflight
         else if (string.IsNullOrWhiteSpace(readme) || Same(readme, templateReadme))
             found.Add(new Finding(false, "readme.md is still the template's - that text becomes the public card."));
 
+        // The declaration the store asks for with every submission. Here rather than after the
+        // upload, because the answer is a sentence about the extension that only its author can give.
+        found.AddRange(ScheduleA.Findings(ScheduleA.Read(info)));
+
         found.AddRange(CheckSettings(dir, csprojPath));
         return found;
     }

@@ -7,7 +7,9 @@ namespace EncyExtensionMcp;
 /** What a ready .nupkg says about itself — read off the archive, nothing uploaded. */
 public sealed record PackageFacts(
     string? PackageId, string? Version, bool HasMarker, string? CategoryTag,
-    bool HasManifest, bool HasAssembly, bool HasReadme, bool HasIcon, int Screenshots, string? SdkVersion);
+    bool HasManifest, bool HasAssembly, bool HasReadme, bool HasIcon, int Screenshots, string? SdkVersion,
+    /** The Schedule A declaration the manifest carries; null when it carries none. */
+    ScheduleADeclaration? Declaration = null);
 
 /**
  * The checks a ready package gets before it is published — the counterpart of Preflight, which reads
@@ -38,6 +40,8 @@ public static class PackageCheck
         string? id = null, version = null, category = null, sdk = null;
         bool marker = false, manifest = false, assembly = false, readme = false, icon = false;
         int screenshots = 0;
+        bool manifestRead = false;
+        ScheduleADeclaration? declaration = null;
 
         var nuspec = archive.Entries.FirstOrDefault(e =>
             e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && !e.FullName.Contains('/'));
@@ -67,8 +71,11 @@ public static class PackageCheck
             if (name.EndsWith(".settings.json", StringComparison.OrdinalIgnoreCase)) manifest = true;
             else if (ext.Equals(".dll", StringComparison.OrdinalIgnoreCase)) assembly = true;
             else if (name.Equals("readme.md", StringComparison.OrdinalIgnoreCase)) readme = true;
-            else if (name.Equals("package.info.json", StringComparison.OrdinalIgnoreCase) && sdk == null)
-                sdk = SdkVersionOf(e);
+            else if (name.Equals("package.info.json", StringComparison.OrdinalIgnoreCase) && !manifestRead)
+            {
+                manifestRead = true;
+                (sdk, declaration) = ManifestOf(e);
+            }
 
             bool image = ImageExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase);
             bool iconName = stem.Equals("icon", StringComparison.OrdinalIgnoreCase) || stem.Equals("logo", StringComparison.OrdinalIgnoreCase);
@@ -77,25 +84,31 @@ public static class PackageCheck
             // screenshots folder that is not called icon or logo.
             else if (image && e.FullName.Contains("screenshots/", StringComparison.OrdinalIgnoreCase)) screenshots++;
         }
-        return new PackageFacts(id, version, marker, category, manifest, assembly, readme, icon, screenshots, sdk);
+        return new PackageFacts(id, version, marker, category, manifest, assembly, readme, icon, screenshots, sdk, declaration);
     }
 
-    private static string? SdkVersionOf(ZipArchiveEntry e)
+    /** The two things the manifest is read for, in one pass over it. */
+    private static (string? Sdk, ScheduleADeclaration? Declaration) ManifestOf(ZipArchiveEntry e)
     {
         try
         {
             using var s = e.Open();
             using var doc = JsonDocument.Parse(s);
-            return doc.RootElement.TryGetProperty("sdkVersion", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            var root = doc.RootElement;
+            string? sdk = root.TryGetProperty("sdkVersion", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            return (sdk, ScheduleA.Read(root));
         }
-        catch (JsonException) { return null; }
+        catch (JsonException) { return (null, null); }
     }
 
     /**
      * What to say about the package. Blocking findings are the ones the store would refuse anyway;
      * the rest is what the author would otherwise learn from a bare card in the catalogue.
+     *
+     * @param today for the tests: the Schedule A deadline is a real date and this code outlives it.
      */
-    public static IReadOnlyList<Finding> Findings(PackageFacts f, IReadOnlyList<StoreCategory> categories, string? recommendedSdk)
+    public static IReadOnlyList<Finding> Findings(PackageFacts f, IReadOnlyList<StoreCategory> categories,
+                                                  string? recommendedSdk, DateOnly? today = null)
     {
         var found = new List<Finding>();
         if (!f.HasMarker)
@@ -126,6 +139,8 @@ public static class PackageCheck
         else if (Numeric(f.SdkVersion) is { } built && Numeric(recommendedSdk) is { } shipped && built > shipped)
             found.Add(new Finding(false, $"built against SDK {f.SdkVersion}, newer than the newest released ENCY carries ({recommendedSdk}) — "
                                        + "it installs for nobody until that release ships."));
+
+        found.AddRange(ScheduleA.Findings(f.Declaration, today));
         return found;
     }
 

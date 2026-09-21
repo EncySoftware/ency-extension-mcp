@@ -80,6 +80,35 @@ the SDK it was built against has shipped in a released ENCY. `publish_package` r
 first, so a package the store would refuse never opens the browser; the rest come back as notes under
 the result. For a source folder the counterpart is `check_extension`.
 
+## What the store asks the publisher to declare
+
+Two consents, neither of which this tool can give on the author's behalf:
+
+- **The Developer Agreement**, once. Accepted in a browser at
+  [apps.encycam.com/publish](https://apps.encycam.com/publish); until it is, every publish route —
+  this tool included — comes back with a 403 naming that page.
+- **The Schedule A declaration**, with every submission: whether the extension works in a Reserved
+  Functionality Domain the [Publishing Policy](https://encycam.com/legal/extension-store/publishing-policy/)
+  reserves, and which Entitlement it verifies. From a tool it travels in the
+  `reservedFunctionality` block of `package.info.json`:
+
+  ```json
+  "reservedFunctionality": { "none": true, "confirmations": ["4.2", "4.9", "4.6"] }
+  ```
+
+  ```json
+  "reservedFunctionality": { "domain": "A-05", "entitlement": "Nesting",
+                             "confirmations": ["4.2", "4.9", "4.6"] }
+  ```
+
+  The manifest this tool writes for a project that had none carries the block **unanswered**, and
+  `check_extension` / `check_package` say so. An assistant should put the question to the author and
+  write down their answer — the confirmations are a statement about their extension, not a
+  formality to tick. Codes and Entitlements:
+  <https://encycam.com/legal/extension-store/reserved-functionality/>. Until **1 November 2026** the
+  store publishes an undeclared submission with a warning (printed under the publish result); after
+  that it refuses.
+
 ## When something is off
 
 - `doctor` (or `ency-extension-mcp doctor`) — the machine in six lines: the tool's version and whether

@@ -24,7 +24,8 @@ public class PreflightTests : IDisposable
               "sdkVersion": "3.0.8",
               "description": "Counts holes and says how many",
               "author": "Andrey",
-              "category": "analyzer"
+              "category": "analyzer",
+              "reservedFunctionality": { "none": true, "confirmations": ["4.2", "4.9", "4.6"] }
             }
             """);
         Write("MyExt.settings.json", """
@@ -52,6 +53,23 @@ public class PreflightTests : IDisposable
 
     [Fact]
     public void AFolderWithNothingWrongSaysNothing() => Assert.Empty(Check());
+
+    /// <summary>The Schedule A declaration is read from the same manifest, and its absence is said
+    /// here rather than by a red build: the answer is the author's, and they are at the keyboard now.</summary>
+    [Fact]
+    public void AManifestWithoutTheScheduleADeclarationSaysSo()
+    {
+        Write("package.info.json", """
+            {
+              "packageId": "MyExt",
+              "targetFramework": "net10.0",
+              "description": "Counts holes and says how many",
+              "author": "Andrey",
+              "category": "analyzer"
+            }
+            """);
+        Assert.Contains(Check(), f => f.Text.Contains("reservedFunctionality"));
+    }
 
     /// <summary>The expensive one: a name of its own does not publish a new version, it creates a
     /// second extension and reserves the name for good.</summary>
@@ -134,7 +152,8 @@ public class PreflightTests : IDisposable
     public void AFrameworkTheManifestDoesNotName()
     {
         Write("package.info.json", """
-            { "packageId": "MyExt", "targetFramework": "net8.0", "description": "d", "author": "a", "category": "analyzer" }
+            { "packageId": "MyExt", "targetFramework": "net8.0", "description": "d", "author": "a", "category": "analyzer",
+              "reservedFunctionality": { "none": true, "confirmations": ["4.2", "4.9", "4.6"] } }
             """);
 
         Assert.Contains("net8.0", Assert.Single(Check()).Text);

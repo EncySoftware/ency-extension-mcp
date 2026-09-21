@@ -84,8 +84,10 @@ This repo is one extension for **ENCY 3**. GitHub Actions builds it and the ENCY
 packs and publishes it when you push a version tag.
 
 **Write for ENCY 3, not ENCY 2.** The SDK is pinned in ``src/EncyExtension.csproj`` as
-``EncySoftware.CAMAPI.Sdk.Net`` 3.0.8 - the 3.x line; a newer 3.x on the public feed is fine to
-move to. Do not "fix" anything by moving to a 2.x version: 2.x is the previous generation of the
+``EncySoftware.CAMAPI.Sdk.Net`` 3.0.8, exactly - not "at least", and do NOT raise it. The SDK fixes
+the versions of the ``*.DotnetHelper`` assemblies; ENCY ships its own copies and .NET never loads one
+older than requested, so an extension built against an SDK newer than the installed ENCY does not
+load at all. Older SDK in newer ENCY is fine; the reverse never is. Do not "fix" anything by moving to a 2.x version: 2.x is the previous generation of the
 product, and an extension built against it is an extension for the old ENCY. (An assistant that read
 the old instructions spent an hour writing for ENCY 2 - hence this paragraph.)
 
@@ -120,7 +122,7 @@ Two guides apply to every change:
 
 - ``.cursor/rules/ency-extension.mdc`` - repo anatomy: the ``CAMAPI.ExtensionFactory`` contract,
   matching ids between ``*.settings.json`` and the factory, ``package.info.json``, how to build for
-  packing.
+  packing, and the ``reservedFunctionality`` declaration the author - not the assistant - answers.
 - ``.cursor/rules/ency-cookbook.mdc`` - COM lifetime (``ComWrapper``), errors through
   ``TResultStatus``, asking the user for parameters, windows and STA rules.
 

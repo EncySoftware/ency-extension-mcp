@@ -47,8 +47,15 @@ public class StoreApiException(int status, string message) : Exception(message)
 public record StagedPackage(string PackageId, string Version, bool HasMarker, string NupkgUploadId,
                             string? SdkVersion, bool SdkNewerThanAnyRelease);
 
-/** The card as it stands after the publish. */
-public record PublishedCard(string Slug, string PackageId, string? LatestVersion, bool Approved, bool Unlisted);
+/**
+ * The card as it stands after the publish.
+ *
+ * @param Warnings what the store accepted but wants said out loud — today, a Schedule A declaration
+ *                 nobody has answered yet. It travels in X-Store-Warning headers, and a header
+ *                 nobody reads is silence, so every publish route prints these.
+ */
+public record PublishedCard(string Slug, string PackageId, string? LatestVersion, bool Approved, bool Unlisted,
+                            IReadOnlyList<string>? Warnings = null);
 
 public interface IStoreClient
 {
@@ -327,13 +334,15 @@ public class StoreClient : IStoreClient
             ["nupkgUploadId"] = staged.NupkgUploadId,
             ["category"] = string.IsNullOrWhiteSpace(category) ? null : category,
         }), Encoding.UTF8, "application/json");
-        using var doc = await Send(UploadHttp, HttpMethod.Post, "/extensions", accessToken, body);
-        var r = doc.RootElement;
+        var (doc, warnings) = await SendReadingHeaders(UploadHttp, HttpMethod.Post, "/extensions", accessToken, body);
+        using var answer = doc;
+        var r = answer.RootElement;
         return new PublishedCard(r.GetProperty("slug").GetString() ?? "",
             r.GetProperty("packageId").GetString() ?? staged.PackageId,
             Str(r, "latestVersion"),
             r.TryGetProperty("approved", out var a) && a.ValueKind == JsonValueKind.True,
-            r.TryGetProperty("unlisted", out var u) && u.ValueKind == JsonValueKind.True);
+            r.TryGetProperty("unlisted", out var u) && u.ValueKind == JsonValueKind.True,
+            warnings);
     }
 
     private static StagedPackage Staged(JsonElement r) => new(
@@ -349,6 +358,13 @@ public class StoreClient : IStoreClient
 
     /** Sends with the bearer; a non-2xx answer becomes StoreApiException carrying the store's message. */
     private async Task<JsonDocument> Send(HttpClient http, HttpMethod method, string path, string accessToken, HttpContent? content = null)
+        => (await SendReadingHeaders(http, method, path, accessToken, content)).Document;
+
+    /** The store's warning header (X-Store-Warning), for the calls whose answer carries remarks. */
+    public const string WarningHeader = "X-Store-Warning";
+
+    private async Task<(JsonDocument Document, IReadOnlyList<string> Warnings)> SendReadingHeaders(
+        HttpClient http, HttpMethod method, string path, string accessToken, HttpContent? content = null)
     {
         var req = new HttpRequestMessage(method, _apiBase + path) { Content = content };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -356,7 +372,10 @@ public class StoreClient : IStoreClient
         string body = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)
             throw new StoreApiException((int)resp.StatusCode, MessageOf(body, resp.ReasonPhrase));
-        return JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        var warnings = resp.Headers.TryGetValues(WarningHeader, out var values)
+            ? values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).ToArray()
+            : Array.Empty<string>();
+        return (JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body), warnings);
     }
 
     private static string MessageOf(string body, string? fallback)
