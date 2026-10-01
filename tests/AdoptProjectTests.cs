@@ -43,8 +43,12 @@ public class AdoptProjectTests : IDisposable
         Assert.Contains("\"targetFramework\": \"net10.0\"", json);
         Assert.Contains("\"description\": \"Times every toolpath\"", json);
         Assert.True(ProjectLayout.HasMarker(json));
-        // Readable by the same parser the preflight uses.
-        System.Text.Json.JsonDocument.Parse(json);
+        // Readable by the same parser the preflight uses, and declaring the answer "none": an empty
+        // reservedDomains, not the earlier reservedFunctionality block.
+        var declaration = System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("reservedDomains");
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, declaration.ValueKind);
+        Assert.Equal(0, declaration.GetArrayLength());
+        Assert.DoesNotContain("reservedFunctionality", json);
     }
 
     [Fact]

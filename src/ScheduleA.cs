@@ -2,59 +2,63 @@ using System.Text.Json;
 
 namespace EncyExtensionMcp;
 
-/**
- * The Schedule A declaration as package.info.json carries it: whether the extension works in a
- * Reserved Functionality Domain the ENCY Publishing Policy reserves, which Entitlement it verifies,
- * and the three Policy paragraphs the publisher confirms.
- */
-public sealed record ScheduleADeclaration(bool None, string? Domain, string? Entitlement,
-                                          IReadOnlyList<string> Confirmations)
-{
-    /** Nothing answered at all — the shape the template ships, so the author sees where it goes. */
-    public bool Unanswered => !None
-                              && string.IsNullOrWhiteSpace(Domain)
-                              && string.IsNullOrWhiteSpace(Entitlement)
-                              && Confirmations.Count == 0;
-}
+/** One entry of `reservedDomains` (Schedule B §B.3.2). */
+public sealed record ReservedDomainEntry(string? Domain, string? Entitlement, IReadOnlyList<string> Capabilities);
 
 /**
- * What can be said about that declaration here, before a publish rather than after it.
- *
- * <p>The store is the authority: it holds the domain codes and the Entitlement names the licensing
- * system knows, and it decides. This only catches what is visible in the file — no block, or the
- * template's empty one — because that is the case that costs an author a red build for a file we
- * shipped. Until the documents take effect the store publishes such a submission with a warning;
- * from that day it refuses, and from that day so does this.</p>
+ * The Reserved Functionality declaration as package.info.json carries it: `reservedDomains`, the
+ * Schedule A areas the extension provides (empty = none). The earlier `reservedFunctionality` block is
+ * still read, and named as the old form.
+ */
+public sealed record ScheduleADeclaration(IReadOnlyList<ReservedDomainEntry> Domains, bool Legacy, string? Malformed);
+
+/**
+ * What can be said about the declaration here, before a publish rather than after it. The store is the
+ * authority — it holds the areas and their licences, and it asks the author to confirm the answer once
+ * in the browser. This catches what is visible in the file: no list, a broken one, the old form.
  */
 public static class ScheduleA
 {
-    /** The manifest key, the same one the store reads out of the package. */
-    public const string Key = "reservedFunctionality";
-
+    public const string Key = "reservedDomains";
+    public const string LegacyKey = "reservedFunctionality";
     public const string Url = "https://encycam.com/legal/extension-store/reserved-functionality/";
-
-    /** Policy paragraphs a declaration confirms; all three, or the store calls it incomplete. */
-    public static readonly IReadOnlyList<string> Confirmations = new[] { "4.2", "4.9", "4.6" };
 
     /** The day the documents take effect — the store's own `app.legal.enforce-from`. */
     public static readonly DateOnly RefusedFrom = new(2026, 11, 1);
 
-    /** The block of a package.info.json root element; null when the manifest carries none. */
     public static ScheduleADeclaration? Read(JsonElement manifest)
     {
-        if (manifest.ValueKind != JsonValueKind.Object
-            || !manifest.TryGetProperty(Key, out var block) || block.ValueKind != JsonValueKind.Object)
-            return null;
-        string? domain = Str(block, "domain");
-        // "domain": "none" is the other way of writing the first answer, as the store reads it too.
-        bool none = (block.TryGetProperty("none", out var n) && n.ValueKind == JsonValueKind.True)
-                    || string.Equals(domain, "none", StringComparison.OrdinalIgnoreCase);
-        var confirmations = new List<string>();
-        if (block.TryGetProperty("confirmations", out var list) && list.ValueKind == JsonValueKind.Array)
-            foreach (var c in list.EnumerateArray())
-                if (c.ValueKind == JsonValueKind.String && c.GetString() is { Length: > 0 } s)
-                    confirmations.Add(s.Trim());
-        return new ScheduleADeclaration(none, none ? null : domain, Str(block, "entitlement"), confirmations);
+        if (manifest.ValueKind != JsonValueKind.Object) return null;
+        if (manifest.TryGetProperty(Key, out var list) && list.ValueKind != JsonValueKind.Null)
+        {
+            if (list.ValueKind != JsonValueKind.Array)
+                return new ScheduleADeclaration([], false,
+                    $"`{Key}` must be a list - [] when the extension provides nothing Schedule A lists");
+            var entries = new List<ReservedDomainEntry>();
+            foreach (var e in list.EnumerateArray())
+            {
+                if (e.ValueKind != JsonValueKind.Object)
+                    return new ScheduleADeclaration([], false,
+                        $"every entry of `{Key}` is an object with \"domain\", \"entitlement\" and \"capabilities\"");
+                var capabilities = new List<string>();
+                if (e.TryGetProperty("capabilities", out var c) && c.ValueKind == JsonValueKind.Array)
+                    foreach (var x in c.EnumerateArray())
+                        if (x.ValueKind == JsonValueKind.String && x.GetString() is { Length: > 0 } s)
+                            capabilities.Add(s.Trim());
+                entries.Add(new ReservedDomainEntry(Str(e, "domain"), Str(e, "entitlement"), capabilities));
+            }
+            return new ScheduleADeclaration(entries, false, null);
+        }
+        if (manifest.TryGetProperty(LegacyKey, out var block) && block.ValueKind == JsonValueKind.Object)
+        {
+            string? domain = Str(block, "domain");
+            bool none = (block.TryGetProperty("none", out var n) && n.ValueKind == JsonValueKind.True)
+                        || string.Equals(domain, "none", StringComparison.OrdinalIgnoreCase);
+            if (none) return new ScheduleADeclaration([], true, null);
+            if (domain == null) return null;   // the template's empty block: no answer at all
+            return new ScheduleADeclaration([new ReservedDomainEntry(domain, Str(block, "entitlement"), [])], true, null);
+        }
+        return null;
     }
 
     /** Same, read straight from the file's text; null when it is not JSON at all. */
@@ -71,37 +75,31 @@ public static class ScheduleA
         string deadline = refused
             ? "the store refuses a submission without it"
             : $"until {RefusedFrom:yyyy-MM-dd} the store publishes anyway and says so; after that it refuses";
-        string how = "answer it with {\"none\": true, \"confirmations\": [\"4.2\", \"4.9\", \"4.6\"]}, or with a "
-                     + "\"domain\" code and the \"entitlement\" it verifies — " + Url;
+        string how = $"add \"{Key}\": [] when the extension provides nothing Schedule A lists, or one entry "
+                     + "{\"domain\", \"entitlement\"} per area it does - " + Url;
         // Said to whoever reads this, which is usually an assistant: the declaration is the author's
-        // statement about their own extension, and the three confirmations are theirs to make.
-        const string whose = "It is the author's statement — ask them, do not answer it for them.";
+        // statement about their own extension, and the store asks the author to confirm it.
+        const string whose = "It is the author's statement - ask them, do not answer it for them; "
+                             + "the store asks them to confirm it once in the browser.";
 
         if (d == null)
         {
-            yield return new Finding(refused, $"package.info.json has no `{Key}` — every submission declares whether the "
-                                            + $"extension works in a Reserved Functionality Domain of Schedule A: {how}. "
-                                            + $"{deadline}. {whose}");
+            yield return new Finding(refused, $"package.info.json has no `{Key}` - {how}. {deadline}. {whose}");
             yield break;
         }
-        if (d.Unanswered)
+        if (d.Malformed != null)
         {
-            yield return new Finding(refused, $"`{Key}` in package.info.json is still unanswered — {how}. {deadline}. {whose}");
+            yield return new Finding(true, d.Malformed + " - " + Url);
             yield break;
         }
-        // Answered, however partly: the store has the domain list and the Entitlement names, so it
-        // gets the last word on those. These two gaps need neither, and cost a round trip each.
-        if (!d.None && string.IsNullOrWhiteSpace(d.Entitlement))
-            yield return new Finding(false, $"`{Key}` names domain {d.Domain} and no `entitlement` — the store asks which "
-                                          + "Entitlement the extension verifies there, spelled as the licensing system spells it.");
-        var missing = Confirmations.Where(c => !d.Confirmations.Contains(c)).ToList();
-        if (missing.Count > 0)
-            // Both numbers spelled out: a list that carries only the subject leaves the sentence
-            // ungrammatical for one of them, and one missing paragraph is the likelier case.
-            yield return new Finding(false, $"`{Key}` does not confirm Policy "
-                                          + (missing.Count == 1 ? "paragraph " : "paragraphs ")
-                                          + string.Join(", ", missing)
-                                          + " — the store asks for all three (4.2, 4.9, 4.6).");
+        if (d.Legacy)
+            yield return new Finding(refused, $"`{LegacyKey}` is the earlier form of the declaration: write `{Key}` "
+                                            + "instead (Schedule B B.3.2). "
+                                            + (refused ? "The store no longer reads it." : $"The store reads it until {RefusedFrom.AddDays(-1):yyyy-MM-dd}."));
+        foreach (var e in d.Domains)
+            if (string.IsNullOrWhiteSpace(e.Domain) || string.IsNullOrWhiteSpace(e.Entitlement))
+                yield return new Finding(false, $"an entry of `{Key}` lacks \"domain\" or \"entitlement\" - each area "
+                                              + $"comes with the licence Schedule A assigns to it ({Url}).");
     }
 
     private static string? Str(JsonElement e, string name) =>

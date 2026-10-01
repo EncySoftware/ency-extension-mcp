@@ -296,7 +296,7 @@ public class FolderPublishTools
     [McpServerTool(Name = "check_extension"), Description(
         "Check an extension folder before publishing, without building or uploading anything: the " +
         "name the store would use, the card's text and category, the identifiers ENCY will ask for, " +
-        "the target framework, and the Schedule A declaration (`reservedFunctionality` in " +
+        "the target framework, and the Schedule A declaration (`reservedDomains` in " +
         "package.info.json) the store asks of every submission - ask the author for that answer, " +
         "never write one for them. publish_folder runs the same checks itself and refuses on the " +
         "ones that would cost a name or a broken card.")]

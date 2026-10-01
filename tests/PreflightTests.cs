@@ -25,7 +25,7 @@ public class PreflightTests : IDisposable
               "description": "Counts holes and says how many",
               "author": "Andrey",
               "category": "analyzer",
-              "reservedFunctionality": { "none": true, "confirmations": ["4.2", "4.9", "4.6"] }
+              "reservedDomains": []
             }
             """);
         Write("MyExt.settings.json", """
@@ -68,7 +68,7 @@ public class PreflightTests : IDisposable
               "category": "analyzer"
             }
             """);
-        Assert.Contains(Check(), f => f.Text.Contains("reservedFunctionality"));
+        Assert.Contains(Check(), f => f.Text.Contains("reservedDomains"));
     }
 
     /// <summary>The expensive one: a name of its own does not publish a new version, it creates a
@@ -153,7 +153,7 @@ public class PreflightTests : IDisposable
     {
         Write("package.info.json", """
             { "packageId": "MyExt", "targetFramework": "net8.0", "description": "d", "author": "a", "category": "analyzer",
-              "reservedFunctionality": { "none": true, "confirmations": ["4.2", "4.9", "4.6"] } }
+              "reservedDomains": [] }
             """);
 
         Assert.Contains("net8.0", Assert.Single(Check()).Text);

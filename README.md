@@ -88,27 +88,34 @@ Two consents, neither of which this tool can give on the author's behalf:
   [apps.encycam.com/publish](https://apps.encycam.com/publish): a short registration (a company or a
   person, free or paid extensions, contact details), then I Agree. Until then, every publish route —
   this tool included — comes back with a 403 naming that page.
-- **The Schedule A declaration**, with every submission: whether the extension works in a Reserved
-  Functionality Domain the [Publishing Policy](https://encycam.com/legal/extension-store/publishing-policy/)
-  reserves, and which Entitlement it verifies. From a tool it travels in the
-  `reservedFunctionality` block of `package.info.json`:
+- **The Schedule A declaration**, with every submission: which of the capabilities ENCY licenses
+  separately — the Reserved Functionality areas listed in Schedule A of the
+  [Publishing Policy](https://encycam.com/legal/extension-store/publishing-policy/) — the extension
+  provides. From a tool it travels in `reservedDomains` of `package.info.json`
+  (Schedule B §B.3.2); `[]` is the answer "none":
 
   ```json
-  "reservedFunctionality": { "none": true, "confirmations": ["4.2", "4.9", "4.6"] }
+  "reservedDomains": []
   ```
+
+  An extension that does provide some lists each area with the licence Schedule A assigns to it
+  (`capabilities` is optional):
 
   ```json
-  "reservedFunctionality": { "domain": "A-05", "entitlement": "Nesting",
-                             "confirmations": ["4.2", "4.9", "4.6"] }
+  "reservedDomains": [
+    { "domain": "A-05", "entitlement": "ENCY Nesting", "capabilities": ["nesting.layout"] }
+  ]
   ```
 
-  The manifest this tool writes for a project that had none carries the block **unanswered**, and
-  `check_extension` / `check_package` say so. An assistant should put the question to the author and
-  write down their answer — the confirmations are a statement about their extension, not a
-  formality to tick. Codes and Entitlements:
-  <https://encycam.com/legal/extension-store/reserved-functionality/>. Until **1 November 2026** the
-  store publishes an undeclared submission with a warning (printed under the publish result); after
-  that it refuses.
+  The manifest this tool writes for a project that had none carries `[]`. `check_extension` /
+  `check_package` say when the list is missing or is not a list, when an entry lacks its licence, and
+  when the manifest still has the earlier `reservedFunctionality` block (the store reads it until
+  31 October 2026 and refuses it after). The answer is the author's statement about their extension:
+  an assistant should put the question to them, not answer it for them. A release with a new answer
+  stops with a link to confirm it in the store — once per answer; confirm, then publish again. Areas
+  and their licences: <https://encycam.com/legal/extension-store/reserved-functionality/>. Until
+  **1 November 2026** the store publishes a submission without `reservedDomains` with a warning
+  (printed under the publish result); after that it refuses.
 
 ## When something is off
 

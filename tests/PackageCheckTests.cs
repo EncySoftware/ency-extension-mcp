@@ -13,8 +13,8 @@ public class PackageCheckTests
     private static readonly StoreCategory[] Known = { new("other", "Other"), new("analyzer", "Analyzer"), new("operation", "Operation") };
 
     /** A package as the ENCY pack tool lays it out; callers strip what they want missing. */
-    /** An answered declaration, as a package ready to publish carries it (legal brief of 18.09.2026). */
-    private const string ScheduleABlock = ""","reservedFunctionality":{"none":true,"confirmations":["4.2","4.9","4.6"]}""";
+    /** The answer "none", as a package ready to publish carries it (Schedule B §B.3.2). */
+    private const string ScheduleABlock = ""","reservedDomains":[]""";
 
     private static MemoryStream Nupkg(string tags = "ency-extension category:analyzer", bool manifest = true, bool dll = true,
                                       bool readme = true, bool icon = true, int screenshots = 2, string? sdk = "3.0.6",
@@ -64,10 +64,12 @@ public class PackageCheckTests
         var f = PackageCheck.Read(Nupkg(declared: false));
         Assert.Null(f.Declaration);
         var note = Assert.Single(PackageCheck.Findings(f, Known, "3.0.6", new DateOnly(2026, 10, 15))
-                                             .Where(x => x.Text.Contains("reservedFunctionality")));
+                                             .Where(x => x.Text.Contains("reservedDomains")));
         Assert.False(note.Blocking, "before the documents take effect the store publishes it with a warning");
 
-        Assert.True(PackageCheck.Read(Nupkg()).Declaration!.None);
+        var answered = PackageCheck.Read(Nupkg()).Declaration!;
+        Assert.Empty(answered.Domains);
+        Assert.False(answered.Legacy);
     }
 
     [Fact]
