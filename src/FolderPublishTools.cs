@@ -550,13 +550,26 @@ public class FolderPublishTools
                     sb.AppendLine(string.Join('\n', b.FailureLog.Split('\n').TakeLast(40)).Trim());
                     sb.AppendLine("```");
                 }
-                sb.Append("Fix the code and call publish_folder again.");
+                sb.Append(StoreRefused(b.FailureLog)
+                    ? "The store refused the publish — do what its message above says (it may need the author in "
+                      + "the browser: accepting the terms, or confirming the Reserved Functionality declaration), "
+                      + "then call publish_folder again."
+                    : "Fix the code and call publish_folder again.");
                 return sb.ToString();
             }
             default:
                 return $"Still building on GitHub — {b.RunUrl ?? actionsUrl}. Call publish_folder_status with the same name in a minute.";
         }
     }
+
+    /**
+     * Whether a failed run's log is the store's answer rather than a build's. The publish action reports
+     * a refusal as one line, "HTTP 403 — <the store's sentence>"; a 4xx is the store saying no to this
+     * submission (terms not accepted, a declaration to confirm, a repository to connect), and no change
+     * to the code gets past it.
+     */
+    private static bool StoreRefused(string? failureLog) =>
+        failureLog != null && System.Text.RegularExpressions.Regex.IsMatch(failureLog.TrimStart(), @"^HTTP 4\d\d\b");
 
     private static string Short(string sha) => sha.Length > 7 ? sha[..7] : sha;
 }

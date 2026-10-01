@@ -364,7 +364,7 @@ public class FolderPublishToolTests
             var res = await Tools(store).PublishFolder("EncyNotify", dir);
             Assert.Contains("failed at Build", res);
             Assert.Contains("error CS1002", res);
-            Assert.Contains("publish_folder again", res);
+            Assert.Contains("Fix the code and call publish_folder again.", res);
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -414,6 +414,25 @@ public class FolderPublishToolTests
         Assert.Contains("failed at Publish", res);
         Assert.Contains("virus scanner", res);
         Assert.Contains("No publish run", await Tools(new FakeStoreClient()).PublishFolderStatus("Other"));
+    }
+
+    /** The store said no to the run (the action reports its answer as "HTTP 4xx — <sentence>"): no change
+     *  to the code gets past that, and the way on is often the author's, in the browser. */
+    [Fact]
+    public async Task AStoreRefusalIsNotSentBackToTheCode()
+    {
+        const string refusal = "HTTP 403 — The Reserved Functionality declaration of EncyNotify (none) has not been "
+            + "confirmed in the store by andrew@example.com. Open https://apps.encycam.com/account?declare=EncyNotify&domains=none, "
+            + "confirm it — once for this answer; then run the publish again.";
+        var store = new FakeStoreClient { BuildsDefault = new[] { Report("FAILED", "t1", step: "Publish", log: refusal) } };
+
+        var res = await Tools(store).PublishFolderStatus("EncyNotify");
+
+        Assert.Contains("declare=EncyNotify&domains=none", res);
+        Assert.Contains("do what its message above says", res);
+        Assert.Contains("in the browser", res);
+        Assert.Contains("publish_folder again", res);
+        Assert.DoesNotContain("Fix the code", res);
     }
 
     /// <summary>A publish brings the SDK pin in line by itself. Asking the tool to "update the
