@@ -15,7 +15,8 @@ public sealed record ScheduleADeclaration(IReadOnlyList<ReservedDomainEntry> Dom
 /**
  * What can be said about the declaration here, before a publish rather than after it. The store is the
  * authority — it holds the areas and their licences, and it asks the author to confirm the answer once
- * in the browser. This catches what is visible in the file: no list, a broken one, the old form.
+ * in the browser. This catches what is visible in the file: no list, a broken one, an entry without its
+ * area or licence, the old form.
  */
 public static class ScheduleA
 {
@@ -40,11 +41,22 @@ public static class ScheduleA
                 if (e.ValueKind != JsonValueKind.Object)
                     return new ScheduleADeclaration([], false,
                         $"every entry of `{Key}` is an object with \"domain\", \"entitlement\" and \"capabilities\"");
+                // Optional - but once written, read as strictly as the store reads it: it refuses the whole
+                // submission over a "capabilities" that is not a list of identifiers, on every date.
                 var capabilities = new List<string>();
-                if (e.TryGetProperty("capabilities", out var c) && c.ValueKind == JsonValueKind.Array)
+                if (e.TryGetProperty("capabilities", out var c) && c.ValueKind != JsonValueKind.Null)
+                {
+                    if (c.ValueKind != JsonValueKind.Array)
+                        return new ScheduleADeclaration([], false,
+                            $"\"capabilities\" of a `{Key}` entry is a list of identifiers");
                     foreach (var x in c.EnumerateArray())
-                        if (x.ValueKind == JsonValueKind.String && x.GetString() is { Length: > 0 } s)
-                            capabilities.Add(s.Trim());
+                    {
+                        if (x.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(x.GetString()))
+                            return new ScheduleADeclaration([], false,
+                                $"\"capabilities\" of a `{Key}` entry holds identifiers as strings");
+                        capabilities.Add(x.GetString()!.Trim());
+                    }
+                }
                 entries.Add(new ReservedDomainEntry(Str(e, "domain"), Str(e, "entitlement"), capabilities));
             }
             return new ScheduleADeclaration(entries, false, null);
@@ -96,10 +108,13 @@ public static class ScheduleA
             yield return new Finding(refused, $"`{LegacyKey}` is the earlier form of the declaration: write `{Key}` "
                                             + "instead (Schedule B B.3.2). "
                                             + (refused ? "The store no longer reads it." : $"The store reads it until {RefusedFrom.AddDays(-1):yyyy-MM-dd}."));
+        // Blocking because the store refuses such an entry on every date. Which licence is the right one
+        // is still the store's to say: it holds the table, this only sees that one is missing.
         foreach (var e in d.Domains)
             if (string.IsNullOrWhiteSpace(e.Domain) || string.IsNullOrWhiteSpace(e.Entitlement))
-                yield return new Finding(false, $"an entry of `{Key}` lacks \"domain\" or \"entitlement\" - each area "
-                                              + $"comes with the licence Schedule A assigns to it ({Url}).");
+                yield return new Finding(true, $"an entry of `{Key}` lacks \"domain\" or \"entitlement\" - each area "
+                                             + $"comes with the licence Schedule A assigns to it ({Url}); the store "
+                                             + "refuses the entry until it names both.");
     }
 
     private static string? Str(JsonElement e, string name) =>

@@ -108,14 +108,16 @@ Two consents, neither of which this tool can give on the author's behalf:
   ```
 
   The manifest this tool writes for a project that had none carries `[]`. `check_extension` /
-  `check_package` say when the list is missing or is not a list, when an entry lacks its licence, and
-  when the manifest still has the earlier `reservedFunctionality` block (the store reads it until
-  31 October 2026 and refuses it after). The answer is the author's statement about their extension:
-  an assistant should put the question to them, not answer it for them. A release with a new answer
-  stops with a link to confirm it in the store — once per answer; confirm, then publish again. Areas
-  and their licences: <https://encycam.com/legal/extension-store/reserved-functionality/>. Until
-  **1 November 2026** the store publishes a submission without `reservedDomains` with a warning
-  (printed under the publish result); after that it refuses.
+  `check_package` say when the list is missing, when the manifest still has the earlier
+  `reservedFunctionality` block (the store reads it until 31 October 2026 and refuses it after),
+  and when the list is malformed or an entry lacks its area or licence — those two stop the publish
+  here, since the store refuses them on every date. The answer is the author's statement about
+  their extension: an assistant should put the question to them, not answer it for them. A release
+  with a new answer stops with a link to confirm it in the store — once per answer; confirm, then
+  publish again. Areas and their licences:
+  <https://encycam.com/legal/extension-store/reserved-functionality/>. Until **1 November 2026** the
+  store publishes a submission without `reservedDomains` with a warning (printed under the publish
+  result); after that it refuses.
 
 ## When something is off
 

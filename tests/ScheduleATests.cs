@@ -60,8 +60,37 @@ public class ScheduleATests
     public void AListThatIsNoListIsRefused() =>
         Assert.Contains(ScheduleA.Findings(Of("{\"reservedDomains\":\"none\"}"), Before), f => f.Blocking);
 
+    /** The store refuses such an entry on every date, so it stops the publish here too. */
     [Fact]
     public void AnEntryWithoutItsLicenceIsTold() =>
         Assert.Contains(ScheduleA.Findings(Of("{\"reservedDomains\":[{\"domain\":\"A-05\"}]}"), Before),
-                        f => f.Text.Contains("entitlement"));
+                        f => f.Blocking && f.Text.Contains("entitlement"));
+
+    [Fact]
+    public void AnEntryWithoutItsAreaIsRefused() =>
+        Assert.Contains(ScheduleA.Findings(Of("{\"reservedDomains\":[{\"entitlement\":\"ENCY Nesting\"}]}"), Before),
+                        f => f.Blocking && f.Text.Contains("domain"));
+
+    /** Written, "capabilities" is a list of identifiers as strings; the store refuses anything else on every date. */
+    [Theory]
+    [InlineData("\"nesting.layout\"")]
+    [InlineData("[1]")]
+    [InlineData("[\"\"]")]
+    [InlineData("[\"  \"]")]
+    public void CapabilitiesThatAreNotAListOfIdentifiersAreRefused(string capabilities)
+    {
+        var f = Assert.Single(ScheduleA.Findings(Of(
+            "{\"reservedDomains\":[{\"domain\":\"A-05\",\"entitlement\":\"ENCY Nesting\",\"capabilities\":" + capabilities + "}]}"), Before));
+        Assert.True(f.Blocking);
+        Assert.Contains("\"capabilities\"", f.Text);
+        Assert.Contains("reservedDomains", f.Text);
+    }
+
+    /** Left out or null, "capabilities" is simply none - as the store reads it. */
+    [Fact]
+    public void CapabilitiesLeftOutOrNullAreNone()
+    {
+        Assert.Empty(ScheduleA.Findings(Of("{\"reservedDomains\":[{\"domain\":\"A-05\",\"entitlement\":\"ENCY Nesting\"}]}"), After));
+        Assert.Empty(ScheduleA.Findings(Of("{\"reservedDomains\":[{\"domain\":\"A-05\",\"entitlement\":\"ENCY Nesting\",\"capabilities\":null}]}"), After));
+    }
 }
