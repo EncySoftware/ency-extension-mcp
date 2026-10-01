@@ -52,6 +52,21 @@ public class ScheduleATests
         Assert.True(ScheduleA.Findings(d, After).Single().Blocking);
     }
 
+    /**
+     * The deadline itself, as UTC dates: the last day of October still only warns, the first of
+     * November refuses. Before and After sit weeks and a day away from it, so a RefusedFrom that slipped
+     * by a day, or ">" written for ">=", would pass them.
+     */
+    [Theory]
+    [InlineData("{\"packageId\":\"MyExt\"}")]                        // no list at all
+    [InlineData("{\"reservedFunctionality\":{\"none\":true}}")]      // the earlier block
+    public void TheLastDayOfOctoberWarnsAndTheFirstOfNovemberRefuses(string manifest)
+    {
+        var d = Of(manifest);
+        Assert.False(Assert.Single(ScheduleA.Findings(d, new DateOnly(2026, 10, 31))).Blocking);
+        Assert.True(Assert.Single(ScheduleA.Findings(d, new DateOnly(2026, 11, 1))).Blocking);
+    }
+
     [Fact]
     public void TheTemplatesEmptyBlockIsNoAnswer() =>
         Assert.Null(Of("{\"reservedFunctionality\":{\"none\":false,\"domain\":\"\",\"entitlement\":\"\",\"confirmations\":[]}}"));
