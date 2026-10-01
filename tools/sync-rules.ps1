@@ -123,7 +123,8 @@ Two guides apply to every change:
 - ``.cursor/rules/ency-extension.mdc`` - repo anatomy: the ``CAMAPI.ExtensionFactory`` contract,
   matching ids between ``*.settings.json`` and the factory, ``package.info.json``, how to build for
   packing, and the ``reservedDomains`` declaration the author - not the assistant - answers (the
-  store asks the author to confirm it once in the browser).
+  store asks the author to confirm it in the browser, and again when the answer, the Schedule A
+  version in force or the statements' words change, or when a run is credited to another person).
 - ``.cursor/rules/ency-cookbook.mdc`` - COM lifetime (``ComWrapper``), errors through
   ``TResultStatus``, asking the user for parameters, windows and STA rules.
 
@@ -152,9 +153,11 @@ From a terminal where git and gh are already set up, a version tag does the same
 git tag v1.2.3 && git push --tags
 ``````
 
-Actions builds the project, the store packs the ENCY-format package and publishes it. A brand new
-extension waits for a store moderator (its direct card link works immediately); new versions of an
-approved extension go live at once.
+Actions builds the project, the store packs the ENCY-format package and publishes it. The first run
+may stop once at each step only the author can take, in the browser - connecting the repository,
+registering and accepting the terms, confirming the declaration: the run's summary has the button,
+then re-run the job. A brand new extension waits for a store moderator (its direct card link works
+immediately); new versions of an approved extension go live at once.
 "@
 
 $outputs += [pscustomobject]@{

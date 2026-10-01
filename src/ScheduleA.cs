@@ -14,8 +14,8 @@ public sealed record ScheduleADeclaration(IReadOnlyList<ReservedDomainEntry> Dom
 
 /**
  * What can be said about the declaration here, before a publish rather than after it. The store is the
- * authority — it holds the areas and their licences, and it asks the author to confirm the answer once
- * in the browser. This catches what is visible in the file: no list, a broken one, an entry without its
+ * authority — it holds the areas and their licences, and it asks the author to confirm the answer in
+ * the browser. This catches what is visible in the file: no list, a broken one, an entry without its
  * area or licence, the old form.
  */
 public static class ScheduleA
@@ -92,7 +92,7 @@ public static class ScheduleA
         // Said to whoever reads this, which is usually an assistant: the declaration is the author's
         // statement about their own extension, and the store asks the author to confirm it.
         const string whose = "It is the author's statement - ask them, do not answer it for them; "
-                             + "the store asks them to confirm it once in the browser.";
+                             + "the store asks them to confirm it in the browser.";
 
         if (d == null)
         {

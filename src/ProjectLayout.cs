@@ -105,7 +105,7 @@ public static class ProjectLayout
         sb.Append($"  \"tags\": \"{PackageCheck.MarkerTag}\",\n");
         sb.Append("  \"requiresRestart\": false,\n");
         // The declaration: the areas of Schedule A the extension provides — none until the author says
-        // otherwise. The store asks the author to confirm the answer once in the browser.
+        // otherwise. The store asks the author to confirm the answer in the browser.
         sb.Append($"  \"{ScheduleA.Key}\": []\n");
         sb.Append("}\n");
         return sb.ToString();

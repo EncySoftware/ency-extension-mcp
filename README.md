@@ -113,8 +113,11 @@ Two consents, neither of which this tool can give on the author's behalf:
   and when the list is malformed or an entry lacks its area or licence — those two stop the publish
   here, since the store refuses them on every date. The answer is the author's statement about
   their extension: an assistant should put the question to them, not answer it for them. A release
-  with a new answer stops with a link to confirm it in the store — once per answer; confirm, then
-  publish again. Areas and their licences:
+  with a new answer stops with a link to confirm it in the store; confirm, then publish again. The
+  store asks again when the answer changes, when a new version of Schedule A comes into force, when
+  the words of the statements change, or when a run is credited to another person — say, a colleague
+  publishing from the same repository or organisation: a confirmation counts only for whoever made
+  it. Areas and their licences:
   <https://encycam.com/legal/extension-store/reserved-functionality/>. Until **1 November 2026** the
   store publishes a submission without `reservedDomains` with a warning (printed under the publish
   result); after that it refuses.
