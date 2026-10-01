@@ -84,8 +84,9 @@ the result. For a source folder the counterpart is `check_extension`.
 
 Two consents, neither of which this tool can give on the author's behalf:
 
-- **The Developer Agreement**, once. Accepted in a browser at
-  [apps.encycam.com/publish](https://apps.encycam.com/publish); until it is, every publish route —
+- **Developer registration and the Developer Agreement**, once. Done in a browser at
+  [apps.encycam.com/publish](https://apps.encycam.com/publish): a short registration (a company or a
+  person, free or paid extensions, contact details), then I Agree. Until then, every publish route —
   this tool included — comes back with a 403 naming that page.
 - **The Schedule A declaration**, with every submission: whether the extension works in a Reserved
   Functionality Domain the [Publishing Policy](https://encycam.com/legal/extension-store/publishing-policy/)
