@@ -186,14 +186,27 @@ public class LocalPublishTools
     }
 
     /**
-     * The one line for a publish the store took without publishing it. Waiting to be signed is not
-     * waiting for a reviewer, so that case repeats the store's own sentence instead of promising one.
+     * The one line for a publish the store took without publishing it, classified the way the server
+     * does: SUBMITTED (or no state) waits for a moderator, PENDING/SIGNED to be signed — that case
+     * repeats the store's own sentence instead of promising a reviewer — and any other state is not on
+     * its way to the catalog at all. The 202's sentence is the same "waiting to be signed" for every
+     * state but SUBMITTED, so for those the state is named next to it.
      */
-    internal static string SubmittedLine(string what, PublishedCard card) =>
-        card.AwaitsReview
-            ? $"Submitted for review: {what} — a moderator approves it before it appears in the catalog"
-            : $"Accepted, not in the catalog yet: {what} — "
-              + (string.IsNullOrWhiteSpace(card.Message) ? "it appears in the catalog once it reaches the feed" : card.Message.Trim());
+    internal static string SubmittedLine(string what, PublishedCard card)
+    {
+        string said = string.IsNullOrWhiteSpace(card.Message) ? "" : card.Message.Trim();
+        if (card.AwaitsReview)
+            return $"Submitted for review: {what} — {Submissions.Moderator}";
+        if (card.AwaitsSigning)
+            return $"Accepted, not in the catalog yet: {what} — " + (said.Length > 0 ? said : "it appears in the catalog once it reaches the feed");
+        bool stopped = Submissions.IsStopped(card.State);
+        string line = (stopped ? "Not published" : "Accepted, not in the catalog yet")
+                    + $": {what} — the store took the upload but reports the version as {card.State}"
+                    + (said.Length > 0 ? $" (it said: \"{said}\")" : "");
+        return line + (stopped ? ". It will not reach the catalog as it is"
+                                 + (card.State == "FAILED" ? "; publish again with a new version." : ".")
+                               : ".");
+    }
 
     [McpServerTool(Name = "check_package"), Description(
         "Check a ready .nupkg before publishing, without signing in or uploading anything: the marker " +

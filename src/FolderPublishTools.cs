@@ -469,7 +469,7 @@ public class FolderPublishTools
         }
         log(report == null ? "no report from GitHub yet" : $"build {report.Status.ToLowerInvariant()}");
         sb.AppendLine();
-        sb.Append(await Describe(name, report, run.ActionsUrl));
+        sb.Append(await Describe(name, report, run.ActionsUrl, token));
         return await WithUpdateNote(sb.ToString());
     }
 
@@ -495,7 +495,7 @@ public class FolderPublishTools
         catch (StoreApiException e) { return $"ERROR: the store refused ({e.Status}): {e.Message}"; }
         var b = builds.FirstOrDefault(x => string.Equals(x.PackageId, name, StringComparison.OrdinalIgnoreCase));
         if (b == null) return $"No publish run of {name} is known to the store yet.";
-        return await Describe(name, b, b.RunUrl);
+        return await Describe(name, b, b.RunUrl, token);
     }
 
     // ---- helpers --------------------------------------------------------------------------------
@@ -523,7 +523,7 @@ public class FolderPublishTools
         catch (StoreApiException) { return null; }
     }
 
-    private async Task<string> Describe(string name, BuildReport? b, string? actionsUrl)
+    private async Task<string> Describe(string name, BuildReport? b, string? actionsUrl, string token)
     {
         if (b == null)
             return $"GitHub has not reported on the run yet — {actionsUrl}. Call publish_folder_status with the same name in a minute.";
@@ -534,7 +534,8 @@ public class FolderPublishTools
                 var card = await store.GetCard(name);
                 var sb = new StringBuilder();
                 sb.Append($"Published {name}{(b.Version != null ? " " + b.Version : "")}.");
-                if (card == null) sb.Append(" The card is not indexed yet — try the store in a minute.");
+                // An empty row (a claimed name, no version under it) is no card to send anyone to.
+                if (card?.LatestVersion == null) sb.Append(" The card is not indexed yet — try the store in a minute.");
                 else if (!card.Approved) sb.Append($" It awaits a store moderator; the card already works by direct link: {card.CardUrl(store.StoreBaseUrl)}");
                 else sb.Append($" Card: {card.CardUrl(store.StoreBaseUrl)}");
                 sb.Append(" The next version is the same publish_folder call.");
@@ -543,25 +544,35 @@ public class FolderPublishTools
             case "FAILED":
             {
                 var sb = new StringBuilder();
-                sb.AppendLine($"The run failed{(b.FailedStep != null ? " at " + b.FailedStep : "")}. {b.RunUrl}");
+                sb.AppendLine(StoreStopped(b.FailureLog)
+                    ? $"Not published: the store took the package, then stopped it. {b.RunUrl}"
+                    : $"The run failed{(b.FailedStep != null ? " at " + b.FailedStep : "")}. {b.RunUrl}");
                 if (!string.IsNullOrWhiteSpace(b.FailureLog))
                 {
                     sb.AppendLine("```");
                     sb.AppendLine(string.Join('\n', b.FailureLog.Split('\n').TakeLast(40)).Trim());
                     sb.AppendLine("```");
                 }
-                sb.Append(StoreRefused(b.FailureLog)
+                sb.Append(StoreStopped(b.FailureLog)
+                    ? "The store took the package but will not publish this version as it is — its message above "
+                      + "says why. Call publish_folder again; a version that FAILED on the way to the feed needs a new number."
+                    : StoreRefused(b.FailureLog)
                     ? "The store refused the publish — do what its message above says (it may need the author in "
                       + "the browser: accepting the terms, or confirming the Reserved Functionality declaration), "
                       + "then call publish_folder again."
                     : "Fix the code and call publish_folder again.");
                 return sb.ToString();
             }
-            // The run went through and the store took the package, but it waits for a moderator: there
-            // is no card to link to until then. The next version is still the same call.
+            // The run went through and the store took the package without publishing it: there is no card
+            // to link to until then. Where the version stands is the store's to say, not the run's — the
+            // report is the run's last word, and a moderator's decision does not rewrite it.
             case "SUBMITTED":
-                return $"Submitted for review: {name}{(b.Version != null ? " " + b.Version : "")} — a moderator approves it "
-                     + "before it appears in the catalog. The next version is the same publish_folder call.";
+            {
+                var card = await store.GetCard(name);
+                var inFlight = Submissions.Of(name, card?.LatestVersion, b, await store.GetMySubmissions(token));
+                if (inFlight == null) goto case "PUBLISHED";   // the card shows it by now
+                return Submissions.Sentence(inFlight) + " The next version is the same publish_folder call.";
+            }
             case "RUNNING":
             case "":
                 return $"Still building on GitHub — {b.RunUrl ?? actionsUrl}. Call publish_folder_status with the same name in a minute.";
@@ -580,6 +591,13 @@ public class FolderPublishTools
      */
     private static bool StoreRefused(string? failureLog) =>
         failureLog != null && System.Text.RegularExpressions.Regex.IsMatch(failureLog.TrimStart(), @"^HTTP 4\d\d\b");
+
+    /**
+     * Whether a failed run's log is a publish the store took (202) and then stopped — FAILED, REJECTED
+     * or WITHDRAWN — which the action reports as "HTTP 202 — …". No change to the code is the fix.
+     */
+    private static bool StoreStopped(string? failureLog) =>
+        failureLog != null && failureLog.TrimStart().StartsWith("HTTP 202", StringComparison.Ordinal);
 
     private static string Short(string sha) => sha.Length > 7 ? sha[..7] : sha;
 }

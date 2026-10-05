@@ -100,6 +100,9 @@ public class FakeStoreClient : IStoreClient
     public List<MyExtension> MyExtensions { get; } = new();
     public Task<IReadOnlyList<MyExtension>> GetMyExtensions(string accessToken) =>
         Task.FromResult<IReadOnlyList<MyExtension>>(MyExtensions);
+    /** The store's submissions; null — a store that does not track them (404), as every store before them. */
+    public IReadOnlyList<MySubmission>? MySubmissions { get; set; }
+    public Task<IReadOnlyList<MySubmission>?> GetMySubmissions(string accessToken) => Task.FromResult(MySubmissions);
 
     // ---- publishing what was built on the author's machine
     public List<(string FileName, byte[] Bytes)> StagedNupkgs { get; } = new();

@@ -329,20 +329,22 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
             return sb.ToString();
         }
         var card = await store.GetCard(packageId);
+        // A first submission claims its name with an empty row, and the store answers for it like for any
+        // card. With no version under it there is nothing to open: that is no card yet.
+        string? cardVersion = card?.LatestVersion;
         sb.AppendLine();
-        // A green run may have ended in "taken for review" (HTTP 202): no card then, or the card of the
-        // previous version. Only the run's report to the store says so, and only when it names a
-        // version the card does not show yet.
-        var build = await StoreBuildOf(packageId);
-        if (build?.Status == "SUBMITTED" && (card == null || build.Version == null
-                                             || !string.Equals(build.Version, card.LatestVersion, StringComparison.OrdinalIgnoreCase)))
+        // A green run may have ended in "taken, not published" (HTTP 202): then the card is missing, or
+        // shows the previous version. The store's submissions say where the run's version stands; a store
+        // without them leaves only the run's own report.
+        var (build, submissions) = await StoreViewOf(packageId);
+        var inFlight = Submissions.Of(packageId, cardVersion, build, submissions);
+        if (inFlight != null)
         {
-            sb.AppendLine($"Submitted for review: {packageId}{(build.Version != null ? " " + build.Version : "")} — "
-                          + "a moderator approves it before it appears in the catalog.");
-            if (card != null)
-                sb.AppendLine($"Until then the card shows {card.LatestVersion}: {card.CardUrl(store.StoreBaseUrl)}");
+            sb.AppendLine(Submissions.Sentence(inFlight));
+            if (card != null && cardVersion != null)
+                sb.AppendLine($"The card still shows {cardVersion}: {card.CardUrl(store.StoreBaseUrl)}");
         }
-        else if (card == null)
+        else if (card == null || cardVersion == null)
         {
             sb.AppendLine($"Run succeeded, but the store has no card for {packageId} yet — try again shortly.");
         }
@@ -363,22 +365,30 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
     // ---------------------------------------------------------------- helpers
 
     /**
-     * What the run last told the store about this package, when the author is signed in. Best-effort:
-     * no sign-in, an expired one or an unreachable store mean "the store did not say", never an error —
-     * the GitHub run and the public card above stay the answer then.
+     * What the run last told the store about this package, and where the store says each submitted
+     * version stands, when the author is signed in. Best-effort: no sign-in, an expired one or an
+     * unreachable store mean "the store did not say", never an error — the GitHub run and the public
+     * card above stay the answer then.
      */
-    private async Task<BuildReport?> StoreBuildOf(string packageId)
+    private async Task<(BuildReport? Build, IReadOnlyList<MySubmission>? Submissions)> StoreViewOf(string packageId)
     {
+        string? token;
+        try { token = await tokens.GetAccessToken(); }
+        catch (Exception) { return (null, null); }
+        if (string.IsNullOrWhiteSpace(token)) return (null, null);
+        BuildReport? build = null;
         try
         {
-            string? token = await tokens.GetAccessToken();
-            if (string.IsNullOrWhiteSpace(token)) return null;
-            return (await store.GetMyBuilds(token))
+            build = (await store.GetMyBuilds(token))
                 .Where(b => string.Equals(b.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(b => b.UpdatedAt, StringComparer.Ordinal)
                 .FirstOrDefault();
         }
-        catch (Exception) { return null; }
+        catch (Exception) { }
+        IReadOnlyList<MySubmission>? submissions;
+        try { submissions = await store.GetMySubmissions(token); }
+        catch (Exception) { submissions = null; }
+        return (build, submissions);
     }
 
     private record struct RunInfo(long Id, string Status, string? Conclusion, string Url);

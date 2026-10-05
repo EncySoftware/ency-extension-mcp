@@ -72,9 +72,9 @@ ency-extension-mcp publish-package MyExt.0.2.0.nupkg --category operation
 It publishes under the author's own store account (the same browser sign-in as everything else). A
 new name waits for a moderator once; a new version of an extension already in the catalogue appears
 at once.
-A publication the store reviews before the catalogue shows it — today the first publication of a new
-extension — may come back as **Submitted for review**, with no card link until a moderator approves
-it; `publish_folder_status`, `my_extensions` and, when signed in, `publish_status` say the same.
+Today that first publication comes back with its card link; a store that reviews every version answers
+**Submitted for review** instead, with no card link until a moderator approves it — and
+`publish_folder_status`, `my_extensions` and (signed in) `publish_status` then say where it stands.
 
 `check_package [path]` (or `ency-extension-mcp check-package`) reads a ready `.nupkg` before any of
 that, with no sign-in and nothing uploaded: the `ency-extension` tag the catalogue needs, the

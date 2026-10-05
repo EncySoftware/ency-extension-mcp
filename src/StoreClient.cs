@@ -53,17 +53,21 @@ public record StagedPackage(string PackageId, string Version, bool HasMarker, st
  * @param Warnings what the store accepted but wants said out loud — today, a Schedule A declaration
  *                 nobody has answered yet. It travels in X-Store-Warning headers, and a header
  *                 nobody reads is silence, so every publish route prints these.
- * @param Submitted the store accepted the package but did not publish it (HTTP 202): it waits for a
- *                 moderator (State SUBMITTED) or to be signed (PENDING/SIGNED). There is no card
- *                 then, so Slug is empty and nothing may link to it.
- * @param Message  the store's own sentence about that wait.
+ * @param Submitted the store accepted the package but did not publish it (HTTP 202). There is no card
+ *                 then, so Slug is empty and nothing may link to it. State says why: SUBMITTED waits
+ *                 for a moderator, PENDING/SIGNED to be signed; any other state (FAILED, say) is not
+ *                 on its way to the catalog at all.
+ * @param Message  the store's own sentence about it.
  */
 public record PublishedCard(string Slug, string PackageId, string? LatestVersion, bool Approved, bool Unlisted,
                             IReadOnlyList<string>? Warnings = null, bool Submitted = false,
                             string? State = null, string? Message = null)
 {
-    /** Waiting for a reviewer, as opposed to waiting to be signed; an unnamed state counts as review. */
-    public bool AwaitsReview => Submitted && State is not ("PENDING" or "SIGNED");
+    /** Waiting for a reviewer: SUBMITTED, or no state named at all — the server's own test. */
+    public bool AwaitsReview => Submitted && Submissions.IsReview(State);
+
+    /** Waiting to be signed; no moderator is involved. */
+    public bool AwaitsSigning => Submitted && Submissions.IsSigning(State);
 }
 
 public interface IStoreClient
@@ -106,6 +110,13 @@ public interface IStoreClient
     Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken);
     /** Every card this person owns, whatever its state — the list behind the site's My published. */
     Task<IReadOnlyList<MyExtension>> GetMyExtensions(string accessToken);
+
+    /**
+     * Where each submitted version stands — moderation, signing, the feed — as a store that reviews
+     * before the feed tracks it. Null when the store has no such list (older stores) or could not be
+     * asked: the run's build report is the only word then. Never throws.
+     */
+    Task<IReadOnlyList<MySubmission>?> GetMySubmissions(string accessToken);
 
     // ---- publishing what was built ON THIS machine: neither git nor GitHub takes part. The server
     //      has done this all along — it is how the website publishes; only the client was missing (15.09.2026).
@@ -314,6 +325,31 @@ public class StoreClient : IStoreClient
                 Str(e, "rejectionReason"), category, Str(e, "lastPublishedAt")));
         }
         return list;
+    }
+
+    public async Task<IReadOnlyList<MySubmission>?> GetMySubmissions(string accessToken)
+    {
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, _apiBase + "/extensions/my/submissions");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            var resp = await _http.SendAsync(req);
+            // A store without the list answers 404; any refusal leaves the build report to speak.
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            var list = new List<MySubmission>();
+            foreach (var s in doc.RootElement.EnumerateArray())
+            {
+                if (s.ValueKind != JsonValueKind.Object) continue;
+                string? packageId = Str(s, "packageId"), version = Str(s, "version"), state = Str(s, "state");
+                if (packageId == null || version == null || state == null) continue;
+                list.Add(new MySubmission(packageId, version, state, Str(s, "rejectionReason"), Str(s, "lastError"),
+                    Str(s, "createdAt"), Str(s, "updatedAt")));
+            }
+            return list;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException) { return null; }
     }
 
     public async Task<StagedPackage> StageNupkg(string fileName, byte[] nupkg, string accessToken)
