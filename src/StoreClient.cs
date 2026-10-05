@@ -53,9 +53,18 @@ public record StagedPackage(string PackageId, string Version, bool HasMarker, st
  * @param Warnings what the store accepted but wants said out loud — today, a Schedule A declaration
  *                 nobody has answered yet. It travels in X-Store-Warning headers, and a header
  *                 nobody reads is silence, so every publish route prints these.
+ * @param Submitted the store accepted the package but did not publish it (HTTP 202): it waits for a
+ *                 moderator (State SUBMITTED) or to be signed (PENDING/SIGNED). There is no card
+ *                 then, so Slug is empty and nothing may link to it.
+ * @param Message  the store's own sentence about that wait.
  */
 public record PublishedCard(string Slug, string PackageId, string? LatestVersion, bool Approved, bool Unlisted,
-                            IReadOnlyList<string>? Warnings = null);
+                            IReadOnlyList<string>? Warnings = null, bool Submitted = false,
+                            string? State = null, string? Message = null)
+{
+    /** Waiting for a reviewer, as opposed to waiting to be signed; an unnamed state counts as review. */
+    public bool AwaitsReview => Submitted && State is not ("PENDING" or "SIGNED");
+}
 
 public interface IStoreClient
 {
@@ -110,7 +119,10 @@ public interface IStoreClient
     /** Pack the staged files ON THE STORE'S SIDE — the same route the CI pipeline takes. */
     Task<StagedPackage> PackFolder(IReadOnlyList<string> fileUploadIds, string? version, string accessToken);
 
-    /** Publish the staged package. A new name then waits for a moderator; a new version does not. */
+    /**
+     * Publish the staged package. A new name then waits for a moderator; a new version does not.
+     * A store that reviews before the feed answers 202 instead — see {@link PublishedCard#Submitted}.
+     */
     Task<PublishedCard> PublishStaged(StagedPackage staged, string? category, string accessToken);
 }
 
@@ -125,11 +137,23 @@ public class StoreClient : IStoreClient
     private readonly string _apiBase =
         (Environment.GetEnvironmentVariable("ENCY_STORE_API") ?? "https://apps.encycam.com/api").TrimEnd('/');
 
+    private readonly HttpClient _http = Http;
+    private readonly HttpClient _uploadHttp = UploadHttp;
+
+    public StoreClient() { }
+
+    /** A client over a scripted handler, so a test reads the store's real answers (codes, bodies, headers). */
+    internal StoreClient(HttpMessageHandler handler, string apiBase)
+    {
+        _http = _uploadHttp = new HttpClient(handler);
+        _apiBase = apiBase.TrimEnd('/');
+    }
+
     public string StoreBaseUrl => _apiBase.EndsWith("/api") ? _apiBase[..^4] : _apiBase;
 
     public async Task<StoreCard?> GetCard(string slugOrPackageId)
     {
-        var resp = await Http.GetAsync($"{_apiBase}/extensions/{Uri.EscapeDataString(slugOrPackageId)}");
+        var resp = await _http.GetAsync($"{_apiBase}/extensions/{Uri.EscapeDataString(slugOrPackageId)}");
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         resp.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
@@ -145,7 +169,7 @@ public class StoreClient : IStoreClient
     {
         try
         {
-            var resp = await Http.GetAsync($"{_apiBase}/sdk");
+            var resp = await _http.GetAsync($"{_apiBase}/sdk");
             if (!resp.IsSuccessStatusCode) return null;
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             // registrableSdk first: the store answers with two numbers - what it recommends, and what
@@ -166,7 +190,7 @@ public class StoreClient : IStoreClient
 
     public async Task<IReadOnlyList<StoreCategory>> GetCategories()
     {
-        var resp = await Http.GetAsync($"{_apiBase}/categories");
+        var resp = await _http.GetAsync($"{_apiBase}/categories");
         if (!resp.IsSuccessStatusCode) return Array.Empty<StoreCategory>();
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
         var list = new List<StoreCategory>();
@@ -190,7 +214,7 @@ public class StoreClient : IStoreClient
                 Encoding.UTF8, "application/json"),
         };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-        var resp = await Http.SendAsync(req);
+        var resp = await _http.SendAsync(req);
         if (resp.IsSuccessStatusCode) return null;
         string body = await resp.Content.ReadAsStringAsync();
         return $"{(int)resp.StatusCode} {resp.ReasonPhrase}: {body.Trim()}";
@@ -200,7 +224,7 @@ public class StoreClient : IStoreClient
 
     public async Task<AppStatus> GetAppStatus(string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Get, "/github/app", accessToken);
+        using var doc = await Send(_http, HttpMethod.Get, "/github/app", accessToken);
         var r = doc.RootElement;
         var installations = new List<string>();
         if (r.TryGetProperty("installations", out var inst))
@@ -216,13 +240,13 @@ public class StoreClient : IStoreClient
 
     public async Task<string> GetAppInstallUrl(string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Get, "/github/app/install", accessToken);
+        using var doc = await Send(_http, HttpMethod.Get, "/github/app/install", accessToken);
         return doc.RootElement.GetProperty("url").GetString() ?? "";
     }
 
     public async Task<AppRepo> CreateRepository(string packageId, string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Post, $"/extensions/{Uri.EscapeDataString(packageId)}/repo", accessToken);
+        using var doc = await Send(_http, HttpMethod.Post, $"/extensions/{Uri.EscapeDataString(packageId)}/repo", accessToken);
         var r = doc.RootElement;
         return new AppRepo(r.GetProperty("packageId").GetString() ?? packageId,
             r.GetProperty("repository").GetString() ?? "", r.GetProperty("url").GetString() ?? "");
@@ -230,7 +254,7 @@ public class StoreClient : IStoreClient
 
     public async Task<RepoState> GetRepoState(string packageId, string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Get, $"/extensions/{Uri.EscapeDataString(packageId)}/repo", accessToken);
+        using var doc = await Send(_http, HttpMethod.Get, $"/extensions/{Uri.EscapeDataString(packageId)}/repo", accessToken);
         var r = doc.RootElement;
         return new RepoState(r.GetProperty("stage").GetString() ?? "generating",
             r.TryGetProperty("ownCode", out var o) && o.GetBoolean(),
@@ -249,7 +273,7 @@ public class StoreClient : IStoreClient
             form.Add(part, "files", System.IO.Path.GetFileName(f.Path));
         }
         form.Add(new StringContent(JsonSerializer.Serialize(files.Select(f => f.Path).ToList())), "paths");
-        using var doc = await Send(UploadHttp, HttpMethod.Post, $"/extensions/{Uri.EscapeDataString(packageId)}/src", accessToken, form);
+        using var doc = await Send(_uploadHttp, HttpMethod.Post, $"/extensions/{Uri.EscapeDataString(packageId)}/src", accessToken, form);
         var r = doc.RootElement;
         return new SourcesUploaded(r.GetProperty("repository").GetString() ?? "",
             r.GetProperty("commitSha").GetString() ?? "", r.GetProperty("commitUrl").GetString() ?? "",
@@ -258,14 +282,14 @@ public class StoreClient : IStoreClient
 
     public async Task<RunStarted> StartRun(string packageId, string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Post, $"/extensions/{Uri.EscapeDataString(packageId)}/run", accessToken);
+        using var doc = await Send(_http, HttpMethod.Post, $"/extensions/{Uri.EscapeDataString(packageId)}/run", accessToken);
         var r = doc.RootElement;
         return new RunStarted(r.GetProperty("repository").GetString() ?? "", r.GetProperty("actionsUrl").GetString() ?? "");
     }
 
     public async Task<IReadOnlyList<BuildReport>> GetMyBuilds(string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Get, "/builds/mine", accessToken);
+        using var doc = await Send(_http, HttpMethod.Get, "/builds/mine", accessToken);
         var list = new List<BuildReport>();
         foreach (var b in doc.RootElement.EnumerateArray())
             list.Add(new BuildReport(
@@ -277,7 +301,7 @@ public class StoreClient : IStoreClient
 
     public async Task<IReadOnlyList<MyExtension>> GetMyExtensions(string accessToken)
     {
-        using var doc = await Send(Http, HttpMethod.Get, "/extensions/my", accessToken);
+        using var doc = await Send(_http, HttpMethod.Get, "/extensions/my", accessToken);
         var list = new List<MyExtension>();
         foreach (var e in doc.RootElement.EnumerateArray())
         {
@@ -298,7 +322,7 @@ public class StoreClient : IStoreClient
         var part = new ByteArrayContent(nupkg);
         part.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(part, "file", fileName);
-        using var doc = await Send(UploadHttp, HttpMethod.Post, "/extensions/parse-nupkg", accessToken, form);
+        using var doc = await Send(_uploadHttp, HttpMethod.Post, "/extensions/parse-nupkg", accessToken, form);
         return Staged(doc.RootElement);
     }
 
@@ -308,7 +332,7 @@ public class StoreClient : IStoreClient
         var part = new ByteArrayContent(bytes);
         part.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(part, "file", fileName);
-        using var doc = await Send(UploadHttp, HttpMethod.Post, "/storage/upload", accessToken, form);
+        using var doc = await Send(_uploadHttp, HttpMethod.Post, "/storage/upload", accessToken, form);
         return doc.RootElement.GetProperty("uploadId").GetString() ?? "";
     }
 
@@ -319,7 +343,7 @@ public class StoreClient : IStoreClient
             ["fileUploadIds"] = fileUploadIds,
             ["version"] = string.IsNullOrWhiteSpace(version) ? null : version,
         }), Encoding.UTF8, "application/json");
-        using var doc = await Send(UploadHttp, HttpMethod.Post, "/extensions/pack-folder", accessToken, body);
+        using var doc = await Send(_uploadHttp, HttpMethod.Post, "/extensions/pack-folder", accessToken, body);
         return Staged(doc.RootElement);
     }
 
@@ -334,9 +358,17 @@ public class StoreClient : IStoreClient
             ["nupkgUploadId"] = staged.NupkgUploadId,
             ["category"] = string.IsNullOrWhiteSpace(category) ? null : category,
         }), Encoding.UTF8, "application/json");
-        var (doc, warnings) = await SendReadingHeaders(UploadHttp, HttpMethod.Post, "/extensions", accessToken, body);
+        var (doc, warnings, status) = await SendReadingHeaders(_uploadHttp, HttpMethod.Post, "/extensions", accessToken, body);
         using var answer = doc;
         var r = answer.RootElement;
+        // 202: taken, not published — no card and no slug, only what was accepted and why it waits.
+        if (status == (int)HttpStatusCode.Accepted)
+        {
+            bool obj = r.ValueKind == JsonValueKind.Object;
+            return new PublishedCard("", (obj ? Str(r, "packageId") : null) ?? staged.PackageId,
+                (obj ? Str(r, "version") : null) ?? staged.Version, Approved: false, Unlisted: false, warnings,
+                Submitted: true, State: obj ? Str(r, "state") : null, Message: obj ? Str(r, "message") : null);
+        }
         return new PublishedCard(r.GetProperty("slug").GetString() ?? "",
             r.GetProperty("packageId").GetString() ?? staged.PackageId,
             Str(r, "latestVersion"),
@@ -363,19 +395,24 @@ public class StoreClient : IStoreClient
     /** The store's warning header (X-Store-Warning), for the calls whose answer carries remarks. */
     public const string WarningHeader = "X-Store-Warning";
 
-    private async Task<(JsonDocument Document, IReadOnlyList<string> Warnings)> SendReadingHeaders(
+    private async Task<(JsonDocument Document, IReadOnlyList<string> Warnings, int Status)> SendReadingHeaders(
         HttpClient http, HttpMethod method, string path, string accessToken, HttpContent? content = null)
     {
         var req = new HttpRequestMessage(method, _apiBase + path) { Content = content };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         var resp = await http.SendAsync(req);
         string body = await resp.Content.ReadAsStringAsync();
+        int status = (int)resp.StatusCode;
         if (!resp.IsSuccessStatusCode)
-            throw new StoreApiException((int)resp.StatusCode, MessageOf(body, resp.ReasonPhrase));
+            throw new StoreApiException(status, MessageOf(body, resp.ReasonPhrase));
         var warnings = resp.Headers.TryGetValues(WarningHeader, out var values)
             ? values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).ToArray()
             : Array.Empty<string>();
-        return (JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body), warnings);
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body); }
+        // Accepted is accepted whatever the body looks like; a card answer that is not JSON stays an error.
+        catch (JsonException) when (status == (int)HttpStatusCode.Accepted) { doc = JsonDocument.Parse("{}"); }
+        return (doc, warnings, status);
     }
 
     private static string MessageOf(string body, string? fallback)

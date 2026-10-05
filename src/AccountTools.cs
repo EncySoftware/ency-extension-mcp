@@ -62,14 +62,29 @@ public class AccountTools(IStoreClient store, IStoreAuth auth)
         Section("Live", rows.Where(r => r.Rank == 4));
         Section("Hidden", rows.Where(r => r.Rank == 3));
 
+        bool HasNoCard(BuildReport b) =>
+            b.PackageId == null || mine.All(e => !e.PackageId.Equals(b.PackageId, StringComparison.OrdinalIgnoreCase));
+
         // A repository whose build failed before anything was published has no card to hang on.
-        var orphans = builds.Where(b => b.Status == "FAILED" && (b.PackageId == null || mine.All(e => !e.PackageId.Equals(b.PackageId, StringComparison.OrdinalIgnoreCase)))).ToList();
+        var orphans = builds.Where(b => b.Status == "FAILED" && HasNoCard(b)).ToList();
         if (orphans.Count > 0)
         {
             if (sb.Length > 0) sb.AppendLine();
             sb.AppendLine("Failed builds without a card yet:");
             foreach (var b in orphans)
                 sb.AppendLine($"- {b.Repository}: FAILED at {b.FailedStep ?? "?"}" + (b.RunUrl != null ? $" — {b.RunUrl}" : ""));
+        }
+
+        // Taken for review before the feed (HTTP 202): the store makes no card until a moderator
+        // approves, so without this the extension would be missing from the list altogether.
+        var submitted = builds.Where(b => b.Status == "SUBMITTED" && HasNoCard(b)).ToList();
+        if (submitted.Count > 0)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.AppendLine("Submitted for review, no card yet:");
+            foreach (var b in submitted)
+                sb.AppendLine($"- {b.PackageId ?? b.Repository}{(b.Version != null ? " " + b.Version : "")} — "
+                              + "a moderator approves it before it appears in the catalog");
         }
         return sb.ToString().TrimEnd();
     }
@@ -98,12 +113,19 @@ public class AccountTools(IStoreClient store, IStoreAuth auth)
         else if (!e.Approved && !string.IsNullOrWhiteSpace(e.RejectionReason))
             sb.AppendLine($"- {e.Name}{version} — rejected: {e.RejectionReason.Trim()} Fix it and publish again ({url})");
         else if (!e.Approved)
-            sb.AppendLine($"- {e.Name}{version} — waiting for a moderator ({url})");
+            sb.AppendLine($"- {e.Name}{version} — waiting for a moderator ({url})" + Submitted(e, build));
         else if (e.Unlisted)
-            sb.AppendLine($"- {e.Name}{version} — hidden from the catalogue ({url})");
+            sb.AppendLine($"- {e.Name}{version} — hidden from the catalogue ({url})" + Submitted(e, build));
         else
             sb.AppendLine($"- {e.Name}{version} — {url}" + (e.Category != null ? $" (category: {e.Category})" : " (category: other)")
-                          + (build?.Status == "RUNNING" ? " — building now" : ""));
+                          + (build?.Status == "RUNNING" ? " — building now" : "") + Submitted(e, build));
         return sb.ToString();
     }
+
+    /** A newer version taken for review: the card still shows the previous one until a moderator approves. */
+    private static string Submitted(MyExtension e, BuildReport? build) =>
+        build?.Status == "SUBMITTED" && build.Version != null
+            && !string.Equals(build.Version, e.LatestVersion, StringComparison.OrdinalIgnoreCase)
+            ? $" — {build.Version} submitted for review"
+            : "";
 }

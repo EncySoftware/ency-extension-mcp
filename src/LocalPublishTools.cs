@@ -164,6 +164,16 @@ public class LocalPublishTools
         try { card = await store.PublishStaged(staged, category, token); }
         catch (StoreApiException e) { return $"ERROR: the store refused to publish ({e.Status}): {e.Message}"; }
 
+        // Taken but not published (HTTP 202): there is no card yet, so there is no link to give.
+        if (card.Submitted)
+        {
+            string what = $"{card.PackageId} {card.LatestVersion ?? staged.Version}";
+            sb.AppendLine(SubmittedLine(what, card));
+            foreach (var note in card.Warnings ?? Array.Empty<string>())
+                sb.AppendLine("- note from the store: " + note);
+            return await WithUpdateNote(sb.ToString().TrimEnd());
+        }
+
         sb.AppendLine($"- published {card.PackageId} {card.LatestVersion ?? staged.Version}");
         // Accepted, with something to say about it — a Schedule A declaration still unanswered, for
         // one. The store sends these as headers, where nobody would ever meet them.
@@ -174,6 +184,16 @@ public class LocalPublishTools
             : $"- waiting for a moderator; the card already opens by its link: {store.StoreBaseUrl}/extension/{card.Slug}");
         return await WithUpdateNote(sb.ToString().TrimEnd());
     }
+
+    /**
+     * The one line for a publish the store took without publishing it. Waiting to be signed is not
+     * waiting for a reviewer, so that case repeats the store's own sentence instead of promising one.
+     */
+    internal static string SubmittedLine(string what, PublishedCard card) =>
+        card.AwaitsReview
+            ? $"Submitted for review: {what} — a moderator approves it before it appears in the catalog"
+            : $"Accepted, not in the catalog yet: {what} — "
+              + (string.IsNullOrWhiteSpace(card.Message) ? "it appears in the catalog once it reaches the feed" : card.Message.Trim());
 
     [McpServerTool(Name = "check_package"), Description(
         "Check a ready .nupkg before publishing, without signing in or uploading anything: the marker " +

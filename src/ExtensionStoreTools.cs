@@ -12,7 +12,7 @@ namespace EncyExtensionMcp;
 /// Thin wrappers over `gh` + `git` + the store REST API — the author's own gh login is the auth.
 /// </summary>
 [McpServerToolType]
-public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreTokenProvider tokens, IUpdateCheck? updates = null)
+public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStoreAuth tokens, IUpdateCheck? updates = null)
 {
     private readonly IUpdateCheck updates = updates ?? new NoUpdateCheck();
     private const string TemplateRepo = "EncySoftware/ency-extension-template";
@@ -330,7 +330,19 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
         }
         var card = await store.GetCard(packageId);
         sb.AppendLine();
-        if (card == null)
+        // A green run may have ended in "taken for review" (HTTP 202): no card then, or the card of the
+        // previous version. Only the run's report to the store says so, and only when it names a
+        // version the card does not show yet.
+        var build = await StoreBuildOf(packageId);
+        if (build?.Status == "SUBMITTED" && (card == null || build.Version == null
+                                             || !string.Equals(build.Version, card.LatestVersion, StringComparison.OrdinalIgnoreCase)))
+        {
+            sb.AppendLine($"Submitted for review: {packageId}{(build.Version != null ? " " + build.Version : "")} — "
+                          + "a moderator approves it before it appears in the catalog.");
+            if (card != null)
+                sb.AppendLine($"Until then the card shows {card.LatestVersion}: {card.CardUrl(store.StoreBaseUrl)}");
+        }
+        else if (card == null)
         {
             sb.AppendLine($"Run succeeded, but the store has no card for {packageId} yet — try again shortly.");
         }
@@ -349,6 +361,25 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, StoreT
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /**
+     * What the run last told the store about this package, when the author is signed in. Best-effort:
+     * no sign-in, an expired one or an unreachable store mean "the store did not say", never an error —
+     * the GitHub run and the public card above stay the answer then.
+     */
+    private async Task<BuildReport?> StoreBuildOf(string packageId)
+    {
+        try
+        {
+            string? token = await tokens.GetAccessToken();
+            if (string.IsNullOrWhiteSpace(token)) return null;
+            return (await store.GetMyBuilds(token))
+                .Where(b => string.Equals(b.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(b => b.UpdatedAt, StringComparer.Ordinal)
+                .FirstOrDefault();
+        }
+        catch (Exception) { return null; }
+    }
 
     private record struct RunInfo(long Id, string Status, string? Conclusion, string Url);
 

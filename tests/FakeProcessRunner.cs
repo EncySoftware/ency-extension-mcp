@@ -131,9 +131,16 @@ public class FakeStoreClient : IStoreClient
         return Task.FromResult(new StagedPackage("MyExt", version ?? "0.1.0", StagedHasMarker, "up-packed", "3.0.6", false));
     }
 
+    /** Set to answer the publish as a store that takes it for review (HTTP 202): SUBMITTED, PENDING… */
+    public string? SubmittedState { get; set; }
+    public string? SubmittedMessage { get; set; }
+
     public Task<PublishedCard> PublishStaged(StagedPackage staged, string? category, string accessToken)
     {
         Published.Add((staged.PackageId, staged.Version, category));
+        if (SubmittedState != null)
+            return Task.FromResult(new PublishedCard("", staged.PackageId, staged.Version, false, false,
+                Submitted: true, State: SubmittedState, Message: SubmittedMessage));
         return Task.FromResult(new PublishedCard(staged.PackageId.ToLowerInvariant(), staged.PackageId,
             staged.Version, PublishedApproved, false));
     }

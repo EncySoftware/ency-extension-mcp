@@ -557,8 +557,18 @@ public class FolderPublishTools
                     : "Fix the code and call publish_folder again.");
                 return sb.ToString();
             }
-            default:
+            // The run went through and the store took the package, but it waits for a moderator: there
+            // is no card to link to until then. The next version is still the same call.
+            case "SUBMITTED":
+                return $"Submitted for review: {name}{(b.Version != null ? " " + b.Version : "")} — a moderator approves it "
+                     + "before it appears in the catalog. The next version is the same publish_folder call.";
+            case "RUNNING":
+            case "":
                 return $"Still building on GitHub — {b.RunUrl ?? actionsUrl}. Call publish_folder_status with the same name in a minute.";
+            // A status this version does not know yet: said as the store said it, never guessed into "building".
+            default:
+                return $"The store reports the run of {name} as {b.Status} — {b.RunUrl ?? actionsUrl}. "
+                     + "Call publish_folder_status with the same name in a minute, or update the tool if it keeps saying so.";
         }
     }
 

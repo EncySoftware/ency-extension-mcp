@@ -3,8 +3,10 @@ using Xunit;
 
 public class PublishToolTests
 {
+    // Not signed in: publish_status asks the store about the run when a token is there, and a real
+    // token provider would sign in with whatever the machine running the tests has stored.
     private static ExtensionStoreTools Tools(FakeProcessRunner proc, FakeStoreClient? store = null)
-        => new(proc, store ?? new FakeStoreClient(), new StoreTokenProvider());
+        => new(proc, store ?? new FakeStoreClient(), new FakeStoreAuth { Token = null });
 
     [Fact]
     public async Task RejectsNonSemver()
