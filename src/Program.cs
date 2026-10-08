@@ -130,23 +130,8 @@ var builder = Host.CreateApplicationBuilder(args);
 // stdout carries the MCP protocol — all logging must go to stderr.
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
-builder.Services.AddSingleton<IStoreClient, StoreClient>();
-builder.Services.AddSingleton<StoreTokenProvider>();
-builder.Services.AddSingleton<IStoreAuth>(sp => sp.GetRequiredService<StoreTokenProvider>());
-builder.Services.AddSingleton<IUpdateCheck, UpdateCheck>();
-builder.Services.AddSingleton<ExtensionStoreTools>();
-builder.Services.AddSingleton<DoctorTools>();
-builder.Services.AddSingleton<AccountTools>();
-// The folder route talks to the browser and waits between polls; both are handed in so a test can
-// replace them, and every word goes to stderr — stdout is the MCP protocol.
-builder.Services.AddSingleton(sp => new FolderPublishTools(
-    sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(),
-    FolderPublishTools.OpenUrl, Task.Delay, s => Console.Error.WriteLine(s), null, sp.GetRequiredService<IUpdateCheck>()));
-builder.Services.AddSingleton(sp => new LocalPublishTools(
-    sp.GetRequiredService<IStoreClient>(), sp.GetRequiredService<IStoreAuth>(), s => Console.Error.WriteLine(s),
-    sp.GetRequiredService<IUpdateCheck>()));
-builder.Services.AddSingleton<GuideTools>();
+// The services only: the SDK builds each tool class per call from these (see ServerSetup).
+builder.Services.AddStoreServices();
 
 builder.Services
     .AddMcpServer()

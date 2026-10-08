@@ -40,16 +40,22 @@ public class FolderPublishTools
     private readonly Func<Task<byte[]>> fetchTemplateZip;
     private readonly IUpdateCheck updates;
 
-    public FolderPublishTools(IStoreClient store, IStoreAuth auth, Func<string, Task> openBrowser,
-                              Func<TimeSpan, Task> delay, Action<string> log, Func<Task<byte[]>>? fetchTemplateZip = null,
-                              IUpdateCheck? updates = null)
+    // Everything after the two services is optional ON PURPOSE: the MCP SDK builds this class anew for
+    // every tool call through ActivatorUtilities.CreateInstance, which ignores the singletons in the
+    // container and asks it for each constructor parameter instead. Required delegates cannot come from
+    // there, so every tool of this class answered "An error occurred invoking ..." over MCP while the
+    // tests, which build the class by hand, stayed green (seen live on 08.10.2026).
+    public FolderPublishTools(IStoreClient store, IStoreAuth auth, Func<string, Task>? openBrowser = null,
+                              Func<TimeSpan, Task>? delay = null, Action<string>? log = null,
+                              Func<Task<byte[]>>? fetchTemplateZip = null, IUpdateCheck? updates = null)
     {
         this.updates = updates ?? new NoUpdateCheck();
         this.store = store;
         this.auth = auth;
-        this.openBrowser = openBrowser;
-        this.delay = delay;
-        this.log = log;
+        this.openBrowser = openBrowser ?? OpenUrl;
+        this.delay = delay ?? (t => Task.Delay(t));
+        // stdout is the MCP protocol; every word for a person goes to stderr.
+        this.log = log ?? (s => Console.Error.WriteLine(s));
         this.fetchTemplateZip = fetchTemplateZip ?? (() => Http.GetByteArrayAsync(TemplateZipUrl));
     }
 

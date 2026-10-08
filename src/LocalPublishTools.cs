@@ -25,11 +25,13 @@ public class LocalPublishTools
     private readonly Action<string> log;
     private readonly IUpdateCheck updates;
 
-    public LocalPublishTools(IStoreClient store, IStoreAuth auth, Action<string> log, IUpdateCheck? updates = null)
+    // `log` is optional for the same reason as in FolderPublishTools: the MCP SDK builds the class per
+    // call from the container, and a required Action<string> made every tool here fail over MCP.
+    public LocalPublishTools(IStoreClient store, IStoreAuth auth, Action<string>? log = null, IUpdateCheck? updates = null)
     {
         this.store = store;
         this.auth = auth;
-        this.log = log;
+        this.log = log ?? (s => Console.Error.WriteLine(s));
         this.updates = updates ?? new NoUpdateCheck();
     }
 
