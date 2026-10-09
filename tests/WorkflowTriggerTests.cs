@@ -74,6 +74,94 @@ public class WorkflowTriggerTests
         Assert.False(StoreWorkflow.StartsOnVersionTag(""));
         Assert.False(StoreWorkflow.StartsOnVersionTag("name: x\njobs: {}\n"));
         Assert.False(StoreWorkflow.StartsOnVersionTag("on:\n  push:\n    tags: ['v*'\n"));   // never closed
+        // ...and told apart from "no": a workflow without on: runs for nothing, one this reader cannot take apart is unknown.
+        Assert.Equal(false, StoreWorkflow.TagTrigger("name: x\njobs: {}\n"));
+        Assert.Equal(false, StoreWorkflow.TagTrigger("on: workflow_dispatch\n"));
+        Assert.Null(StoreWorkflow.TagTrigger("on:\n  push:\n    tags: ['v*'\n"));
+    }
+
+    /**
+     * YAML's implicit one-pair map in a flow list — `schedule: [cron: '0 6 * * 1']` is valid GitHub — held
+     * the reader at the ':' and grew its list until the process ran out of memory; connect_to_store never
+     * answered (review, 09.10.2026). Each must come back, and at once.
+     */
+    [Theory]
+    [InlineData("on:\n  schedule: [cron: '0 6 * * 1']\n  workflow_dispatch:\n", false)]
+    [InlineData("on: [a: b]\n", false)]
+    [InlineData("on:\n  push:\n    branches: [main, release: x]\n", false)]
+    [InlineData("on:\n  workflow_dispatch:\n    inputs:\n      env:\n        options: [prod: live, test]\n  push:\n    tags: ['v*']\n", true)]
+    [InlineData("on:\n  workflow_dispatch:\n    inputs:\n      env:\n        default: [a: b]\n", false)]
+    [InlineData("on: [push, {pull_request: x}, c: d]\n", true)]
+    [InlineData("on:\n  push:\n    tags: {a: b: c}\n", false)]
+    public void A_pair_inside_a_flow_list_is_read_and_never_holds_the_reader(string on, bool starts)
+    {
+        var read = Task.Run(() => StoreWorkflow.StartsOnVersionTag("name: x\n" + on + Job));
+        Assert.True(read.Wait(TimeSpan.FromSeconds(10)), "the reader did not come back");
+        Assert.Equal(starts, read.Result);
+    }
+
+    /**
+     * Read past, not stopped at: a block scalar (a workflow_dispatch input's description over several
+     * lines), an anchor, a tab after the colon, a value on the line under its key, plain and quoted
+     * scalars over several lines. Each used to read as "no tag trigger".
+     */
+    [Theory]
+    [InlineData("on:\n  push:\n    tags: ['v*']\n  workflow_dispatch:\n    inputs:\n      v:\n        description: |\n          multi\n          line\n        required: true\n")]
+    [InlineData("on:\n  workflow_dispatch:\n    inputs:\n      v:\n        description: >-\n          folded: text\n          - not a list\n  push:\n    tags: ['v*']\n")]
+    [InlineData("on:\n  push:\n    tags: &versions ['v*']\n")]
+    [InlineData("on:\n  push: &p\n    tags: ['v*']\n")]
+    [InlineData("on:\n  push:\n    tags:\t['v*']\n")]
+    [InlineData("on:\n  push\n")]
+    [InlineData("on:\n  [push, workflow_dispatch]\n")]
+    [InlineData("on:\n  workflow_dispatch:\n    inputs:\n      v:\n        description: a description that goes on\n          over the next line\n  push:\n    tags: ['v*']\n")]
+    [InlineData("on:\n  workflow_dispatch:\n    inputs:\n      v:\n        description: 'a quoted one that goes on\n          over the next line'\n  push:\n    tags: ['v*']\n")]
+    public void Block_scalars_anchors_tabs_and_values_over_lines_are_read_past(string on) =>
+        Assert.Equal(true, StoreWorkflow.TagTrigger("name: x\n" + on + Job));
+
+    /** An alias is not followed: where it decides, nothing is claimed; where it does not, it is no obstacle. */
+    [Fact]
+    public void An_alias_decides_nothing()
+    {
+        Assert.Null(StoreWorkflow.TagTrigger("on:\n  push:\n    tags: *versions\n" + Job));
+        Assert.Null(StoreWorkflow.TagTrigger("on:\n  push: *p\n" + Job));
+        Assert.Null(StoreWorkflow.TagTrigger("on:\n  push:\n    tags: ['v1*', *more]\n" + Job));
+        Assert.Equal(true, StoreWorkflow.TagTrigger("on:\n  workflow_dispatch:\n    inputs:\n      v:\n        default: *d\n  push:\n    tags: ['v*']\n" + Job));
+        Assert.Null(StoreWorkflow.TagTrigger("on:\n  push:\n    tags: |\n      v*\n" + Job));   // a block scalar where the patterns go
+    }
+
+    /** Run workflow is offered for workflow_dispatch only. */
+    [Theory]
+    [InlineData("on: workflow_dispatch\n", true)]
+    [InlineData("on:\n  push:\n    tags: ['v*']\n  workflow_dispatch:\n    inputs: {}\n", true)]
+    [InlineData("on: push\n", false)]
+    [InlineData("on: [push, *x]\n", null)]
+    public void Run_workflow_is_offered_for_workflow_dispatch(string on, bool? byHand) =>
+        Assert.Equal(byHand, StoreWorkflow.RunsByHand("name: x\n" + on + Job));
+
+    /** The Actions tab lists a workflow by its name, and how it starts is said from its on: block. */
+    [Fact]
+    public void A_workflow_is_named_and_its_start_said_the_way_GitHub_shows_them()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "mcp-wf-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string File(string name, string yaml) { string f = Path.Combine(dir, name); System.IO.File.WriteAllText(f, yaml); return f; }
+            string both = File("both.yml", "name: Release to the store   # shown in Actions\r\non:\r\n  push:\r\n    tags: ['v*']\r\n  workflow_dispatch:\r\n" + Job);
+            string tag = File("tag.yml", "on: push\n" + Job);
+            string hand = File("hand.yml", "name: 'By hand'\non: workflow_dispatch\n" + Job);
+            string neither = File("neither.yml", "on: [pull_request]\n" + Job);
+
+            Assert.Equal("Release to the store", StoreWorkflow.DisplayName(both));
+            Assert.Equal("tag.yml", StoreWorkflow.DisplayName(tag));
+            Assert.Equal("By hand", StoreWorkflow.DisplayName(hand));
+            Assert.Equal("a version tag (vX.Y.Z), or Actions -> \"Release to the store\" -> Run workflow on GitHub", StoreWorkflow.HowItStarts(both));
+            Assert.Equal("a version tag (vX.Y.Z)", StoreWorkflow.HowItStarts(tag));
+            Assert.Equal("Actions -> \"By hand\" -> Run workflow on GitHub", StoreWorkflow.HowItStarts(hand));
+            Assert.Equal("the way its on: block says", StoreWorkflow.HowItStarts(neither));
+            Assert.Equal(new[] { "both.yml", "tag.yml" }, StoreWorkflow.TagWorkflows(dir).ToArray());
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     [Theory]

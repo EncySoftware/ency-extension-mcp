@@ -47,13 +47,13 @@ public class ConnectedRepositoryTests : IDisposable
     private static ExtensionStoreTools Store(FakeProcessRunner proc, FakeStoreClient? store = null) =>
         new(proc, store ?? new FakeStoreClient(), new FakeStoreAuth { Token = null });
 
-    private static FakeProcessRunner Push(string tag = "v1.0.0") => new FakeProcessRunner()
+    private static FakeProcessRunner Push(string tag = "v1.0.0", string runs = "[]") => new FakeProcessRunner()
         .On("git status --porcelain", stdout: "")
         .On("git rev-parse", exit: 1)
         .On("git tag")
         .On("git push origin HEAD")
         .On($"git push origin {tag}")
-        .On("gh run list", stdout: "[]");
+        .On("gh run list", stdout: runs);
 
     // ---- publish_extension and publish_status
 
@@ -212,9 +212,177 @@ public class ConnectedRepositoryTests : IDisposable
 
         Assert.StartsWith($"ERROR: the project is at {_repo}, and this repository publishes through .github/workflows/release.yml, "
                           + "not through the template's workflow", answer);
-        Assert.Contains("Publish by starting release.yml the way it runs", answer);
+        // How it starts, read from its on: block — `on: push` is a tag push, and no Run workflow.
+        Assert.EndsWith("Publish by starting release.yml: a version tag (vX.Y.Z).", answer);
         Assert.DoesNotContain("connect_to_store", answer);
         Assert.DoesNotContain(proc.Calls, c => c.StartsWith("git tag") || c.StartsWith("git push"));
+    }
+
+    // ---- publish_extension tags only where the tag publishes
+
+    /**
+     * DirectCladdingOperation's own shape: no workflow publishes to the store, and a v* tag starts its
+     * nuget.org workflow. publish_extension pushed the tag all the same — a nuget.org release, not a store
+     * one — and answered "building and publishing" (review, 09.10.2026).
+     */
+    [Fact]
+    public async Task Publish_extension_tags_nothing_where_no_workflow_publishes_to_the_store()
+    {
+        Project("project/main/MyExt.csproj", connected: false);
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "publish_prod.yml"),
+            "name: Publish to NuGet\non:\n  push:\n    tags:\n      - 'v*'\njobs:\n  p:\n    steps:\n      - run: dotnet nuget push out\n");
+        var proc = Push();
+
+        string answer = await Store(proc).PublishExtension(repoDir: _repo);
+
+        Assert.StartsWith("ERROR: no workflow in this repository publishes to the store (none uses publish-extension-action), so a version "
+                          + "tag publishes nothing there - it starts publish_prod.yml, which does not publish to the store.", answer);
+        Assert.Contains("gets a workflow of its own from connect_to_store", answer);
+        Assert.EndsWith("Nothing was tagged.", answer);
+        Assert.DoesNotContain(proc.Calls, c => c.StartsWith("git tag v") || c.StartsWith("git push") || c.StartsWith("git commit"));
+
+        // publish_status names what a tag does start, instead of saying it starts nothing.
+        string status = await Store(new FakeProcessRunner().On("gh run list", stdout: "[]")).PublishStatus(_repo);
+        Assert.Contains("- it starts publish_prod.yml, which does not publish to the store.", status);
+        Assert.DoesNotContain("starts nothing", status);
+    }
+
+    /** The template's src/ layout without the template's workflow: nothing tagged, nothing adopted, update_extension named. */
+    [Fact]
+    public async Task Publish_extension_in_the_src_layout_with_no_workflow_writes_and_tags_nothing()
+    {
+        Project("src/MyExt.csproj", connected: false);
+        var proc = Push();
+
+        string answer = await Store(proc).PublishExtension("1.0.0", repoDir: _repo);
+
+        Assert.StartsWith("ERROR: no workflow in this repository publishes to the store", answer);
+        Assert.Contains("gets the template's back from update_extension", answer);
+        Assert.Empty(proc.Calls);
+        Assert.False(File.Exists(Path.Combine(_repo, "src", "package.info.json")));
+    }
+
+    /**
+     * The template's workflow with the project nested elsewhere and publish_extension called at the root:
+     * src/ and the root hold no csproj, so nothing used to stop the tag (review, 09.10.2026).
+     */
+    [Fact]
+    public async Task Publish_extension_at_the_root_finds_the_project_the_templates_workflow_would_not_build()
+    {
+        Project("project/main/MyExt.csproj", connected: false);
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "publish.yml"), ConnectToolTests.TemplatesWorkflow);
+        var proc = Push();
+
+        string answer = await Store(proc).PublishExtension("1.0.0", repoDir: _repo);
+
+        Assert.StartsWith($"ERROR: the project is at {Path.Combine(_repo, "project", "main")}, but the template's workflow "
+                          + "(.github/workflows/publish.yml) builds src/", answer);
+        Assert.Empty(proc.Calls);
+
+        // No project anywhere: the template's run would have nothing to build.
+        Directory.Delete(Path.Combine(_repo, "project"), true);
+        string none = await Store(proc).PublishExtension("1.0.0", repoDir: _repo);
+        Assert.StartsWith("ERROR: the template's workflow (.github/workflows/publish.yml) builds src/, and there is no csproj in", none);
+        Assert.Empty(proc.Calls);
+    }
+
+    /** A workflow of the author's own that only Run workflow starts: a tag would start nothing, and is not pushed. */
+    [Fact]
+    public async Task Publish_extension_does_not_tag_for_a_workflow_a_tag_does_not_start()
+    {
+        Project("src/MyExt.csproj", connected: false);
+        File.WriteAllText(Path.Combine(_repo, "src", "package.info.json"), "{\n  \"packageId\": \"MyExt\",\n  \"tags\": \"ency-extension\"\n}\n");
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "release.yml"),
+            "name: Release to the store\non: workflow_dispatch\njobs:\n  p:\n    steps:\n      - uses: EncySoftware/publish-extension-action@v1\n");
+        var proc = Push("v1.0.1");
+
+        string answer = await Store(proc).PublishExtension("1.0.1", repoDir: _repo);
+
+        Assert.StartsWith("ERROR: this repository publishes through .github/workflows/release.yml, and a version tag does not start it", answer);
+        Assert.Contains("Start it on GitHub: Actions -> \"Release to the store\" -> Run workflow.", answer);
+        Assert.Empty(proc.Calls);
+    }
+
+    /**
+     * The run reported is the one this tag started: the newest run of the workflow could be a manual one,
+     * or the last tag's, and was reported as this publish (review, 09.10.2026).
+     */
+    [Fact]
+    public async Task Publish_extension_reports_only_the_run_its_tag_started()
+    {
+        Project("MyExt.csproj", connected: true);
+        const string older = "{\"databaseId\":111,\"status\":\"completed\",\"conclusion\":\"success\","
+                           + "\"url\":\"https://github.com/acme/MyExt/actions/runs/111\",\"headBranch\":\"main\",\"event\":\"workflow_dispatch\"}";
+        const string mine = "{\"databaseId\":222,\"status\":\"queued\",\"conclusion\":\"\","
+                          + "\"url\":\"https://github.com/acme/MyExt/actions/runs/222\",\"headBranch\":\"v1.0.0\",\"event\":\"push\"}";
+        var proc = Push(runs: $"[{older},{mine}]");
+
+        string answer = await Store(proc).PublishExtension("1.0.0", repoDir: _repo);
+
+        Assert.Contains("workflow run: https://github.com/acme/MyExt/actions/runs/222 (queued)", answer);
+        Assert.DoesNotContain("runs/111", answer);
+
+        var stale = Push(runs: $"[{older}]");
+        string waiting = await Store(stale).PublishExtension("1.0.0", repoDir: _repo);
+        Assert.Contains("the run of publish_store.yml for v1.0.0 has not registered yet", waiting);
+        Assert.DoesNotContain("runs/111", waiting);
+    }
+
+    // ---- the template's route refuses a store workflow of the author's own
+
+    private void OwnStoreWorkflow() =>
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(Workflows).FullName, "store.yml"),
+            "on:\n  push:\n    tags: ['v*']\njobs:\n  p:\n    steps:\n      - run: dotnet pack -c Release -o out\n"
+            + "      - uses: EncySoftware/publish-extension-action@v1\n        with:\n          nupkg: out/*.nupkg\n");
+
+    /**
+     * A repository that publishes through a workflow of the author's own was told apart from one with no
+     * workflow by nothing: update_extension planted the template's beside it, and package.info.json with it
+     * (review, 09.10.2026). Wherever the project sits — the root, a folder of its own, src/.
+     */
+    [Theory]
+    [InlineData("MyExt.csproj")]
+    [InlineData("project/main/MyExt.csproj")]
+    [InlineData("src/MyExt.csproj")]
+    public async Task Update_extension_refuses_a_repository_with_a_store_workflow_of_its_own(string rel)
+    {
+        Project(rel, connected: false);
+        OwnStoreWorkflow();
+        int fetched = 0;
+        var tools = Folder(() => { fetched++; return Task.FromResult(Array.Empty<byte>()); });
+        var before = Files();
+
+        string answer = await tools.UpdateExtension(Path.GetDirectoryName(Path.Combine(_repo, rel))!);
+
+        Assert.StartsWith($"ERROR: {_repo} publishes to the store already, through .github/workflows/store.yml - a workflow of its own", answer);
+        Assert.Contains("update_extension would plant the template's workflow beside it", answer);
+        Assert.Contains("A version is published by starting store.yml: a version tag (vX.Y.Z)", answer);
+        Assert.Equal(0, fetched);
+        Assert.Equal(before, Files());
+    }
+
+    [Fact]
+    public async Task Publish_folder_refuses_a_repository_with_a_store_workflow_of_its_own()
+    {
+        Project("MyExt.csproj", connected: false);
+        OwnStoreWorkflow();
+        var auth = new FakeStoreAuth { Token = null };
+        var store = new FakeStoreClient();
+        var tools = new FolderPublishTools(store, auth, _ => Task.CompletedTask, _ => Task.CompletedTask, _log.Add,
+            () => Task.FromResult(Array.Empty<byte>()));
+        var before = Files();
+
+        string answer = await tools.PublishFolder("Acme.MyExt", _repo);
+
+        Assert.StartsWith($"ERROR: {_repo} publishes to the store already, through .github/workflows/store.yml", answer);
+        Assert.Contains("publish_folder would make a second repository for it from the template, besides acme/MyExt", answer);
+        Assert.Equal(0, auth.LoginCalls);
+        Assert.Empty(store.CreatedRepos);
+        Assert.Empty(store.Uploads);
+        Assert.Equal(before, Files());
     }
 
     /** Where publish_extension does tag, it follows the run of the workflow that publishes — the one publish_status follows. */

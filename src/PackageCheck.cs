@@ -11,7 +11,12 @@ public sealed record PackageFacts(
     /** The Schedule A declaration the manifest carries; null when it carries none. */
     ScheduleADeclaration? Declaration = null,
     /** Why the manifest would not find its dll once ENCY has installed the package; null when it would. */
-    string? LayoutProblem = null);
+    string? LayoutProblem = null,
+    /**
+     * The package.info.json the store reads — the first entry whose name ends in it, wherever it sits
+     * (build/package.info.json, say); null when the package carries none.
+     */
+    string? ManifestEntry = null);
 
 /**
  * The checks a ready package gets before it is published — the counterpart of Preflight, which reads
@@ -42,7 +47,7 @@ public static class PackageCheck
         string? id = null, version = null, category = null, sdk = null;
         bool marker = false, manifest = false, assembly = false, readme = false, icon = false;
         int screenshots = 0;
-        bool manifestRead = false;
+        string? manifestEntry = null;
         ScheduleADeclaration? declaration = null;
 
         var nuspec = archive.Entries.FirstOrDefault(e =>
@@ -82,9 +87,9 @@ public static class PackageCheck
             else if (ext.Equals(".dll", StringComparison.OrdinalIgnoreCase)) assembly = true;
             else if (name.Equals("readme.md", StringComparison.OrdinalIgnoreCase)) readme = true;
             // The store's own pick: the first entry whose name ends in package.info.json, wherever it sits.
-            else if (e.FullName.EndsWith("package.info.json", StringComparison.OrdinalIgnoreCase) && !manifestRead)
+            else if (e.FullName.EndsWith("package.info.json", StringComparison.OrdinalIgnoreCase) && manifestEntry == null)
             {
-                manifestRead = true;
+                manifestEntry = e.FullName.Replace('\\', '/');
                 (sdk, declaration) = ManifestOf(e);
             }
 
@@ -106,7 +111,7 @@ public static class PackageCheck
             return reader.ReadToEnd();
         });
         return new PackageFacts(id, version, marker, category, manifest, assembly, readme, icon, screenshots,
-                                SdkOf(sdk, nuspecSdk), declaration, layout);
+                                SdkOf(sdk, nuspecSdk), declaration, layout, manifestEntry);
     }
 
     // ---- the SDK the package needs, read exactly as the store reads it (backend PackageSdk, SemVers)

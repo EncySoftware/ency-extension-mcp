@@ -102,14 +102,12 @@ if (args.Length > 0 && args[0].Equals("check-package", StringComparison.OrdinalI
     return result.StartsWith("ERROR") ? 1 : 0;
 }
 
-// `ency-extension-mcp connect-to-store [path] [--csproj <path>]` — the MCP tool connect_to_store for a
-// terminal: a project that was not made from the template gets the PackagePath fix and a workflow of
-// its own, both checked with a real pack.
+// `ency-extension-mcp connect-to-store [path] [--csproj <path> | csproj=<path>]` — the MCP tool
+// connect_to_store for a terminal: a project that was not made from the template gets the PackagePath
+// fix and a workflow of its own, both checked with a real pack.
 if (args.Length > 0 && args[0].Equals("connect-to-store", StringComparison.OrdinalIgnoreCase))
 {
-    int csprojAt = Array.FindIndex(args, a => a.Equals("--csproj", StringComparison.OrdinalIgnoreCase));
-    string? csprojArg = csprojAt > 0 && csprojAt + 1 < args.Length ? args[csprojAt + 1] : null;
-    string? pathArg = args.Skip(1).Where((a, i) => !a.StartsWith("--") && i + 1 != csprojAt + 1).FirstOrDefault();
+    var (pathArg, csprojArg) = ConnectTools.CommandLine(args.Skip(1).ToArray());
     string result = await new ConnectTools(new ProcessRunner(), new StoreClient(), new UpdateCheck(), Console.Error.WriteLine)
         .ConnectToStore(pathArg, csprojArg);
     Console.WriteLine(result);

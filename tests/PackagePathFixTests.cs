@@ -159,15 +159,38 @@ public class PackagePathFixTests
                      + "    <None Include=\"b.json\" Pack=\"true\" PACKAGEPATH=\"build\\\" />\n"
                      + "    <None Update=\"c.json\" Pack=\"true\">\n      <packagepath>build\\</packagepath>\n    </None>\n"
                      + "    <Content Include=\"d.json\" Packagepath=\"build\\\" />\n"
-                     + "    <None Include=\"e.json\" packagepath=\"build\\\" />";   // not packed: NuGet never sees it
+                     + "    <None Include=\"e.json\" packagepath=\"build\\\" />\n"   // not packed: NuGet never sees it
+                     // Pack itself is read in any letter case — NuGet's targets test it in MSBuild conditions.
+                     + "    <None Include=\"f.json\" pack=\"true\" packagepath=\"contentFiles\\any\\any\\\" CopyToOutputDirectory=\"Always\" />\n"
+                     + "    <None Include=\"g.json\" PACK=\"true\" packagepath=\"build/\" />";
         var plan = Plan(items);
 
         Assert.Empty(plan.Edits);
         Assert.Equal(Csproj(items), plan.Text);
-        Assert.Equal(new[] { "packagepath", "PACKAGEPATH", "packagepath", "Packagepath" },
+        Assert.Equal(new[] { "packagepath", "PACKAGEPATH", "packagepath", "Packagepath", "packagepath", "packagepath" },
                      plan.Problems.Select(p => System.Text.RegularExpressions.Regex.Match(p, "spelled `([^`]+)`").Groups[1].Value).ToArray());
         Assert.All(plan.Problems, p => Assert.Contains("NuGet reads only `PackagePath` - it ignores this one and packs the files "
                                                       + "under content/ and contentFiles/ both", p));
+    }
+
+    /**
+     * Pack in another letter case packs as Pack does: a real `dotnet pack` (SDK 10.0.401, 09.10.2026) put
+     * pack="true" PackagePath="build/" in build/, pack="true" with no PackagePath and PACK="true" in content/
+     * and contentFiles/ both, and left pack="false" out. Read only as `Pack`, such an item was taken for one
+     * NuGet does not pack, and its contentFiles value went unseen.
+     */
+    [Fact]
+    public void Pack_is_read_in_any_letter_case()
+    {
+        var plan = Plan("    <None Include=\"a.settings.json\" pack=\"true\" PackagePath=\"contentFiles\\any\\any\\\" CopyToOutputDirectory=\"Always\" />\n"
+                      + "    <None Include=\"b.json\" PACK=\"true\" CopyToOutputDirectory=\"Always\" />\n"
+                      + "    <None Include=\"c.json\" pack=\"false\" PackagePath=\"contentFiles\\any\\any\\\" CopyToOutputDirectory=\"Always\" />\n"
+                      + "    <None Include=\"d.json\" CopyToOutputDirectory=\"Always\">\n      <pack>true</pack>\n"
+                      + "      <PackagePath>contentFiles\\any\\any\\</PackagePath>\n    </None>");
+
+        Assert.Equal(new[] { ("a.settings.json", "build\\"), ("d.json", "build\\") }, plan.Edits.Select(e => (e.Item, e.After)).ToArray());
+        Assert.Contains("line 7, None b.json: packed without a PackagePath, so NuGet puts it under content/ and contentFiles/ both - give it "
+                        + "PackagePath=\"build\\\".", Assert.Single(plan.Problems));
     }
 
     /** LinkBase puts a file from outside the project under that folder of the output, plus what its wildcard matched. */

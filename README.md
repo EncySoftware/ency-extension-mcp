@@ -44,9 +44,11 @@ the assistant and the MCP registration inside. Nothing on GitHub is touched unti
 repository of its own (one that has, and is packed with `dotnet pack`, is connected with
 `connect_to_store` instead — see below), and `ency-extension-mcp update-extension [folder]` brings an
 extension made from the template in line with the current template — the SDK pin and the files the
-template owns — from a terminal. Both refuse a repository connected with `connect_to_store`, and a
-project outside `src/` in a repository with no template workflow (`publish_folder`: a GitHub
-repository): the template's files would undo what such a repository publishes with.
+template owns — from a terminal. Both refuse a repository connected with `connect_to_store`, one that
+publishes through a store workflow of its own (it uses the store's publish action and is not the
+template's `publish.yml`), and a project outside `src/` in a repository with no template workflow
+(`publish_folder`: a GitHub repository): the template's files would undo what such a repository
+publishes with.
 
 `ency-extension-mcp publish-folder <Name> <folder>` is the same route from a terminal. The store
 does the GitHub work through its GitHub App: creates the repository in the author's account,
@@ -159,11 +161,14 @@ ency-extension-mcp connect-to-store                     # the repository or proj
 ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyExtension.csproj
 ```
 
+(`csproj=project/main/MyExtension.csproj` works there too — the form the tool's answers use.)
+
 - It finds the extension's csproj: the one that references `EncySoftware.CAMAPI.SDK.Net` or packs a
   `*.settings.json`. With several, it lists them and asks for `csproj`. That search reads the csproj
   alone, so it misses a project whose SDK reference sits in `Directory.Build.props` or
-  `Directory.Packages.props`; pointed at that project's folder, it takes the one csproj there, and
-  otherwise it asks for `csproj`.
+  `Directory.Packages.props`; pointed at that project's folder, it takes the one csproj there — and
+  every answer, a failure most of all, says which csproj it took that way — and otherwise it asks for
+  `csproj`.
 - It moves what the csproj packs under `contentFiles/` to `build\`. The store installer in ENCY merges
   `build/`, `content/` and `lib/<tfm>/` into one folder next to the dll and keeps every other folder
   as it is, so a manifest packed under `contentFiles/any/any/` looks for its dll in that subfolder and
@@ -176,9 +181,11 @@ ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyE
   byte order mark, the line endings and every other line stay as they were. An item a text edit cannot
   put right is listed instead, with what it needs — among them a packed item whose `PackagePath` is
   written in another letter case: NuGet reads the name as written and ignores any other spelling (a
-  real pack put such files under `content/` and `contentFiles/` both).
+  real pack put such files under `content/` and `contentFiles/` both). `Pack`, by contrast, counts in
+  any letter case: NuGet's targets test it in MSBuild conditions, so `pack="true"` packs the item.
 - It adds `.github/workflows/publish_store.yml` when the repository has a GitHub remote (a mirror will
-  do), never overwriting one and never touching the other workflows: a `vX.Y.Z` tag, or **Actions →
+  do: the answer's push line, and `publish_extension`, push to that remote), never overwriting one and
+  never touching the other workflows: a `vX.Y.Z` tag, or **Actions →
   Run workflow** with a version (and **dry run** to have the store only check the package), packs the
   project on GitHub — Release, nuget.org and the ENCY Nexus as sources (some SDK versions are only
   there), NU1603 as an error — and publishes the `.nupkg` with the run's own GitHub token. No secrets.
@@ -187,7 +194,9 @@ ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyE
   through another workflow already (one that uses the store's publish action): with the template's
   `publish.yml` and the project in `src/`, the answer points at `publish_extension` and
   `update_extension`; with the project outside `src/`, at moving it there or deleting `publish.yml`;
-  with a workflow of the author's own, there is nothing to connect. With no GitHub remote, or outside
+  with a workflow of the author's own, there is nothing to connect — but the answer says how that
+  workflow starts and lists the `PackagePath` values the csproj would need, should that workflow publish
+  what `dotnet pack` makes of it (nothing is changed). With no GitHub remote, or outside
   git, no workflow is added (it would never run), but the csproj is fixed and checked all the same,
   and the answer gives the `dotnet pack` line and `publish_package` to publish from this machine.
 - It proves both with a real `dotnet pack` on this machine (so it needs the .NET SDK the project
@@ -198,10 +207,14 @@ ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyE
   and the workflow were left as they were, and what would land where; a csproj that cannot be written
   back has its original saved to a file the answer names. It restores from the workflow's two sources,
   but through this machine's package cache, while the run on GitHub starts cold — so a package the
-  cache got from another source is named; a source that does not answer (NU1301) is named in plain words.
+  cache got from another source is named, and where the cache's sources cannot be read the answer says
+  the run may differ; a source that does not answer (NU1301) is named in plain words. Files the Release
+  build has no copy of are noted once per folder.
   What the store would still refuse at the first publish is named in the answer: no `ency-extension`
-  tag, a prerelease SDK, or an SDK newer than the line the store publishes under; the package check's
-  notes on the card (no screenshots, readme or icon) follow the check.
+  tag, a prerelease SDK, an SDK newer than the line the store publishes under, or a Schedule A answer
+  it refuses on every date and every route (a `reservedDomains` that is not a list, an entry without
+  its area or licence); the package check's notes on the card (no screenshots, readme or icon) follow
+  the check.
 
 The check models the store tab in ENCY, which lays out what it installs from the store. Where ENCY's
 NuGet-based installer (Helpers.Nuget) decides the layout instead, it copies only what the package's
@@ -209,10 +222,12 @@ NuGet-based installer (Helpers.Nuget) decides the layout instead, it copies only
 a bare dll.
 
 It writes no `package.info.json` and no Schedule A answer — that answer is the author's to give. The
-answer says where it goes: a `package.info.json` next to the csproj holding `"reservedDomains": []`
-(or one entry per area), packed with
-`<None Include="package.info.json" Pack="true" PackagePath="build\" CopyToOutputDirectory="PreserveNewest" />`;
-the store reads the first `package.info.json` in the package.
+answer says where it goes. The store reads the first `package.info.json` in the package, so when the
+package carries one already the key goes into that file, named by its path in the package — never into
+a second one beside it, which NuGet drops (NU5118) or the store never reads. When it carries none: a
+`package.info.json` next to the csproj holding `"reservedDomains": []` (or one entry per area), packed
+with
+`<None Include="package.info.json" Pack="true" PackagePath="build\" CopyToOutputDirectory="PreserveNewest" />`.
 
 The answer ends with what only the author can do, once, in the browser — sign in at
 [apps.encycam.com](https://apps.encycam.com), the developer registration and the terms on the Publish
@@ -226,16 +241,24 @@ appear at once; the workflow passes no category, so a new card lands in `other` 
 category keeps it; and the other workflows a version tag starts, read from their `on:` blocks. The
 first publish binds the repository to the extension, so start it as the card's owner with that GitHub
 account linked; from then on every run from the repository is credited to that owner, whoever starts
-it (to bind it in advance: **Connect** on the account page, or
-`ency-extension-mcp claim <PackageId> <owner/repo>`). After that `publish_extension` pushes the
-version tag, and `publish_status` follows the run of `publish_store.yml` to the store card.
+it. To bind it in advance: the link the answer gives,
+`apps.encycam.com/account?connect=<PackageId>&repo=<owner/repo>` (the account page shows **Connect**
+to someone with GitHub linked only when such a link brings them), or
+`ency-extension-mcp claim <PackageId> <owner/repo>` — either works only for whoever linked the
+repository's owner, a person or an organisation, through Sign in with GitHub. After that
+`publish_extension` pushes the version tag, and `publish_status` follows the run of
+`publish_store.yml` to the store card.
 
 `publish_extension` and `publish_status` follow the workflow that publishes a repository —
 `publish_store.yml`, the template's `publish.yml`, or one of the author's own that uses the store's
-publish action. Where none does, `publish_status` says which tool adds one instead of sending the
-author to `publish_extension`, whose tag would start nothing; where the template's `publish.yml`
-builds `src/` and the project is elsewhere, `publish_extension` says to move it into `src/` or to
-delete `publish.yml` and connect the repository.
+publish action. `publish_extension` tags nothing, and commits nothing, where no workflow publishes to
+the store — a tag would publish nothing there, and could start others, a nuget.org push, say: it names
+those, and the tool that adds a workflow that publishes — nor where the workflow that publishes is not
+started by a version tag (it names Run workflow instead). It pushes to the repository's GitHub remote,
+which need not be `origin`, and reports only the run its own tag started. `publish_status` names the
+same tool where no workflow publishes; where the template's `publish.yml` builds `src/` and the
+project is elsewhere — at the root or deeper down — `publish_extension` says to move it into `src/` or
+to delete `publish.yml` and connect the repository.
 
 A project made from the template, or brought into its `src/` layout, publishes the template's way:
 `publish_folder` and `publish_extension` find the csproj under `src/`, `publish_package` finds it
@@ -244,7 +267,8 @@ pin, the `ency-extension` tag) and the answer says so; an existing one gets the 
 `Directory.Build.props` / `Directory.Build.targets` give any csproj under the repository the flat
 output and the `PackReady` target the workflow builds with (`update_extension` brings those two files
 into a repository made earlier) — which is why `update_extension` refuses a project of its own shape
-(outside `src/` in a repository with no template workflow, or connected with `connect_to_store`):
+(outside `src/` in a repository with no template workflow, connected with `connect_to_store`, or
+published through a store workflow of the author's own):
 `PackReady` deletes `*.xml` from the output, and an operation can keep its definition in one. The one thing no tool can write is `<Name>.settings.json` — the extension's manifest of entry
 points, without which ENCY registers nothing; the template has a sample.
 

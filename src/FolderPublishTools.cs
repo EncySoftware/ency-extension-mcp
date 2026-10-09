@@ -165,7 +165,8 @@ public class FolderPublishTools
         "NOT for a project packed with `dotnet pack` in a GitHub repository of its own, nor for a " +
         "repository connected with connect_to_store (it has .github/workflows/publish_store.yml) - use " +
         "connect_to_store for those: this tool plants the template's workflow and build files, which " +
-        "expect the template's src/ layout, and refuses such a repository. For an extension made from the " +
+        "expect the template's src/ layout. It refuses a connected repository, one that publishes through a " +
+        "store workflow of its own, and a project outside src/ where no workflow is the template's. For an extension made from the " +
         "template, or in its src/ layout: bring it in line with the current template - fix the SDK pin " +
         "when it points at a version no released application carries, refresh what the template owns " +
         "(the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed, " +
@@ -229,10 +230,12 @@ public class FolderPublishTools
 
     /**
      * Why the template's route must not touch this folder; null when it may. A repository connected with
-     * connect_to_store publishes through its own workflow, and a project outside src/ in a repository
-     * with no template workflow is one of its own shape: the template's files would undo both. Seen on a
-     * connected repository (review, 09.10.2026): update_extension added a second v*-triggered workflow
-     * and Directory.Build.props/targets for every project in it, then said "publish a new version".
+     * connect_to_store, or one that publishes through a store workflow of the author's own, publishes
+     * already; a project outside src/ in a repository with no template workflow is one of its own shape:
+     * the template's files would undo all three. Seen on a connected repository (review, 09.10.2026):
+     * update_extension added a second v*-triggered workflow and Directory.Build.props/targets for every
+     * project in it, then said "publish a new version" — and the same beside a workflow of the author's
+     * own, which was told apart from "no workflow" by nothing.
      */
     internal static string? NotTheTemplatesRoute(string folder, string? csproj, string consequence)
     {
@@ -242,8 +245,15 @@ public class FolderPublishTools
                  + "A version is published with publish_extension (it pushes a v* tag) or Actions -> Run workflow; after "
                  + "changing what the project packs, call connect_to_store again.";
         string? repo = GitRepository.Root(folder);
-        if (repo != null && csproj != null && !ConnectTools.IsUnder(csproj, Path.Combine(repo, "src"))
-            && StoreWorkflow.OtherStoreWorkflow(repo) == null)
+        if (repo == null) return null;
+        string? other = StoreWorkflow.OtherStoreWorkflow(repo);
+        string? otherPath = other == null ? null : Path.Combine(repo, ".github", "workflows", other);
+        if (otherPath != null && !StoreWorkflow.IsTemplates(otherPath))
+            return $"ERROR: {repo} publishes to the store already, through .github/workflows/{other} - a workflow of its own (it "
+                 + $"uses publish-extension-action), not the template's. {consequence} Nothing was changed. A version is published by "
+                 + $"starting {other}: {StoreWorkflow.HowItStarts(otherPath)}; connect_to_store says what in the csproj the store tab "
+                 + "in ENCY would not install right.";
+        if (csproj != null && !ConnectTools.IsUnder(csproj, Path.Combine(repo, "src")) && otherPath == null)
             return $"ERROR: {Path.GetRelativePath(repo, csproj).Replace('\\', '/')} is not in the template's src/ layout, and "
                  + $"the repository has no workflow of the template's. {consequence} Nothing was changed. A project packed with "
                  + "`dotnet pack` in a repository of its own publishes from there: connect_to_store fixes what it packs and "
@@ -378,8 +388,9 @@ public class FolderPublishTools
         "Publish an ENCY extension from a local folder that has NO GitHub repository of its own, with no " +
         "git and no gh on this machine. A project that already has its own GitHub repository and is " +
         "packed with `dotnet pack` publishes from there instead: connect_to_store gives that repository a " +
-        "workflow and no second repository is made (this tool refuses such a repository, and one " +
-        "connected with connect_to_store). The store creates the repository in the author's GitHub " +
+        "workflow and no second repository is made (in a repository on GitHub this tool refuses a project " +
+        "outside src/ where no workflow is the template's, one that publishes through a store workflow of its " +
+        "own, and one connected with connect_to_store). The store creates the repository in the author's GitHub " +
         "account (through the store's GitHub App), commits the folder into src/, runs the template's " +
         "GitHub build and publishes; the project need not come from the template - a missing " +
         "package.info.json is written from the csproj and the store's marker tag added. The author is " +

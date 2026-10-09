@@ -85,7 +85,7 @@ public static class PackagePathFix
             if (value == null)
             {
                 // Packed with no PackagePath at all: NuGet's default puts it under content/ AND contentFiles/.
-                bool packed = IsTrue(Meta(el, "Pack")) || (kind.Equals("Content", StringComparison.OrdinalIgnoreCase) && !IsFalse(Meta(el, "Pack")));
+                bool packed = IsTrue(PackOf(el)) || (kind.Equals("Content", StringComparison.OrdinalIgnoreCase) && !IsFalse(PackOf(el)));
                 if (packed && defaultHasContentFiles && misspelt == null && !specsWithPath.Contains(item) && IsPayload(kind))
                 {
                     // NuGet's default places it by its folder in the project, copied or not — so does the hint.
@@ -95,7 +95,7 @@ public static class PackagePathFix
                 }
                 continue;
             }
-            if (IsFalse(Meta(el, "Pack"))) continue;
+            if (IsFalse(PackOf(el))) continue;
 
             var parts = Split(value);
             char sep = value.Contains('\\') || !value.Contains('/') ? '\\' : '/';
@@ -423,21 +423,36 @@ public static class PackagePathFix
 
     private static string? Attr(XElement el, string name) => el.Attribute(name)?.Value;
 
-    /** Item metadata: an attribute, or a child element of that name. */
-    private static string? Meta(XElement el, string name) =>
-        el.Attribute(name)?.Value ?? el.Elements().FirstOrDefault(c => c.Name.LocalName == name)?.Value;
+    /**
+     * Item metadata: an attribute, or a child element of that name — as written, or in any letter case
+     * for metadata NuGet's pack targets read through MSBuild conditions.
+     */
+    private static string? Meta(XElement el, string name, bool anyCase = false)
+    {
+        var how = anyCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return el.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals(name, how))?.Value
+               ?? el.Elements().FirstOrDefault(c => c.Name.LocalName.Equals(name, how))?.Value;
+    }
+
+    /**
+     * Pack, in whatever letter case: NuGet's targets test it in MSBuild conditions, which do not care.
+     * Measured with SDK 10.0.401 (09.10.2026): dotnet pack packs pack="true" and PACK="true" and leaves
+     * pack="false" out, while PackagePath counts only as written; dotnet build copies an item only for
+     * CopyToOutputDirectory as written — so those two stay exact.
+     */
+    private static string? PackOf(XElement el) => Meta(el, "Pack", anyCase: true);
 
     /**
      * Item metadata as the item ends up with it: this element's own, else the last element of the
      * same kind naming the same files that sets it — MSBuild applies them in order.
      */
-    private static string? MetaAcross(XElement el, List<XElement> items, string name)
+    private static string? MetaAcross(XElement el, List<XElement> items, string name, bool anyCase = false)
     {
-        if (Meta(el, name) is { } own) return own;
+        if (Meta(el, name, anyCase) is { } own) return own;
         string spec = Spec(el);
         return items.Where(o => o != el && o.Name.LocalName.Equals(el.Name.LocalName, StringComparison.OrdinalIgnoreCase)
                                 && Spec(o).Equals(spec, StringComparison.OrdinalIgnoreCase))
-                    .Select(o => Meta(o, name)).LastOrDefault(v => v != null);
+                    .Select(o => Meta(o, name, anyCase)).LastOrDefault(v => v != null);
     }
 
     private static string Spec(XElement el) => (Attr(el, "Include") ?? Attr(el, "Update") ?? "").Trim().Replace('/', '\\');
@@ -458,10 +473,10 @@ public static class PackagePathFix
               .Where(d => d.Name.LocalName.Equals(el.Name.LocalName, StringComparison.OrdinalIgnoreCase))
               .Select(d => Meta(d, "CopyToOutputDirectory")).LastOrDefault(x => x != null);
 
-    /** Whether NuGet packs the item at all: Content unless Pack="false", anything else only with Pack="true". */
+    /** Whether NuGet packs the item at all: Content unless Pack="false", anything else only with Pack="true" (in any letter case). */
     private static bool Packed(XElement el, List<XElement> items)
     {
-        string? pack = MetaAcross(el, items, "Pack");
+        string? pack = MetaAcross(el, items, "Pack", anyCase: true);
         return el.Name.LocalName.Equals("Content", StringComparison.OrdinalIgnoreCase) ? !IsFalse(pack) : IsTrue(pack);
     }
 

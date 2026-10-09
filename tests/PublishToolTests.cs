@@ -1,12 +1,36 @@
 using EncyExtensionMcp;
 using Xunit;
 
-public class PublishToolTests
+public class PublishToolTests : IDisposable
 {
+    private readonly List<string> _dirs = new();
+
+    public void Dispose()
+    {
+        foreach (var d in _dirs) try { Directory.Delete(d, true); } catch { }
+    }
+
     // Not signed in: publish_status asks the store about the run when a token is there, and a real
     // token provider would sign in with whatever the machine running the tests has stored.
     private static ExtensionStoreTools Tools(FakeProcessRunner proc, FakeStoreClient? store = null)
         => new(proc, store ?? new FakeStoreClient(), new FakeStoreAuth { Token = null });
+
+    /**
+     * A repository of the template's shape, which publish_extension tags for: the template's workflow,
+     * the project in src/ and a manifest with the store's marker. A folder with no workflow that
+     * publishes is refused before anything is tagged (ConnectedRepositoryTests).
+     */
+    private string TemplateRepo(string manifest = "{\n  \"packageId\": \"MyExt\",\n  \"tags\": \"ency-extension\",\n  \"category\": \"analyzer\"\n}\n")
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcp-pub-" + Guid.NewGuid().ToString("N")[..8]);
+        _dirs.Add(dir);
+        Directory.CreateDirectory(Path.Combine(dir, ".github", "workflows"));
+        File.WriteAllText(Path.Combine(dir, ".github", "workflows", "publish.yml"), ConnectToolTests.TemplatesWorkflow);
+        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        File.WriteAllText(Path.Combine(dir, "src", "MyExt.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(dir, "src", "package.info.json"), manifest);
+        return dir;
+    }
 
     [Fact]
     public async Task RejectsNonSemver()
@@ -20,7 +44,7 @@ public class PublishToolTests
     public async Task RefusesDirtyTreeWithoutCommitAll()
     {
         var proc = new FakeProcessRunner().On("git status --porcelain", stdout: " M src/Extension.cs\n");
-        var res = await Tools(proc).PublishExtension("1.0.0");
+        var res = await Tools(proc).PublishExtension("1.0.0", repoDir: TemplateRepo());
         Assert.StartsWith("ERROR", res);
         Assert.Contains("uncommitted", res);
         Assert.DoesNotContain(proc.Calls, c => c.StartsWith("git tag"));
@@ -38,7 +62,7 @@ public class PublishToolTests
             .On("git push origin HEAD")
             .On("git push origin v1.0.0")
             .On("gh run list", stdout: "[]");
-        var res = await Tools(proc).PublishExtension("1.0.0", commitAll: true);
+        var res = await Tools(proc).PublishExtension("1.0.0", repoDir: TemplateRepo(), commitAll: true);
         Assert.DoesNotContain("ERROR", res);
         Assert.Contains(proc.Calls, c => c.StartsWith("git commit -m \"Release v1.0.0\""));
         Assert.Contains(proc.Calls, c => c == "git tag v1.0.0");
@@ -49,9 +73,7 @@ public class PublishToolTests
     [Fact]
     public async Task SaysSoWhenTheManifestNamesNoCategory()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "mcp-cat-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(dir, "src"));
-        File.WriteAllText(Path.Combine(dir, "src", "package.info.json"), "{\n  \"packageId\": \"MyExt\"\n}\n");
+        var dir = TemplateRepo("{\n  \"packageId\": \"MyExt\",\n  \"tags\": \"ency-extension\"\n}\n");
         var proc = HappyPathPush();
 
         var res = await Tools(proc).PublishExtension("1.0.0", repoDir: dir);
@@ -65,11 +87,7 @@ public class PublishToolTests
     [Fact]
     public async Task KeepsQuietWhenTheManifestHasACategory()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "mcp-cat-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(dir, "src"));
-        File.WriteAllText(Path.Combine(dir, "src", "package.info.json"), "{\n  \"packageId\": \"MyExt\",\n  \"category\": \"analyzer\"\n}\n");
-
-        var res = await Tools(HappyPathPush()).PublishExtension("1.0.0", repoDir: dir);
+        var res = await Tools(HappyPathPush()).PublishExtension("1.0.0", repoDir: TemplateRepo());
 
         Assert.DoesNotContain("ERROR", res);
         Assert.DoesNotContain("names no category", res);
@@ -98,7 +116,7 @@ public class PublishToolTests
         var proc = new FakeProcessRunner()
             .On("git status --porcelain", stdout: "")
             .On("git rev-parse", exit: 0, stdout: "abc123"); // tag exists
-        var res = await Tools(proc).PublishExtension("1.0.0");
+        var res = await Tools(proc).PublishExtension("1.0.0", repoDir: TemplateRepo());
         Assert.StartsWith("ERROR", res);
         Assert.Contains("already exists", res);
     }
@@ -145,7 +163,7 @@ public class PublishToolTests
             .On("git push")
             .On("gh run list", stdout: "[]");
 
-        var res = await Tools(proc).PublishExtension();
+        var res = await Tools(proc).PublishExtension(repoDir: TemplateRepo());
 
         Assert.Contains("Pushed v0.1.9", res);
         Assert.Contains("no version given", res);
@@ -169,7 +187,7 @@ public class PublishToolTests
             .On("git push")
             .On("gh run list", stdout: "[]");
 
-        Assert.Contains("Pushed v2.0.0", await Tools(proc).PublishExtension("v2.0.0"));
+        Assert.Contains("Pushed v2.0.0", await Tools(proc).PublishExtension("v2.0.0", repoDir: TemplateRepo()));
     }
 
     [Fact]

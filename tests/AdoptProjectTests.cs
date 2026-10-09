@@ -179,6 +179,8 @@ public class AdoptProjectTests : IDisposable
         string repo = Path.Combine(Path.GetTempPath(), "mcp-adopt-repo-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Path.Combine(repo, "src"));
         File.WriteAllText(Path.Combine(repo, "src", "ToolpathTimer.csproj"), Csproj);
+        Directory.CreateDirectory(Path.Combine(repo, ".github", "workflows"));
+        File.WriteAllText(Path.Combine(repo, ".github", "workflows", "publish.yml"), ConnectToolTests.TemplatesWorkflow);
         var proc = new FakeProcessRunner()
             .On("git status --porcelain", stdout: "")
             .On("git add src/package.info.json")
@@ -202,13 +204,16 @@ public class AdoptProjectTests : IDisposable
         finally { Directory.Delete(repo, true); }
     }
 
+    /** The template's workflow builds src/: a project at the root is refused before anything is tagged or committed. */
     [Fact]
     public async Task PublishExtensionRefusesAProjectOutsideSrc()
     {
+        Directory.CreateDirectory(Path.Combine(_dir, ".github", "workflows"));
+        File.WriteAllText(Path.Combine(_dir, ".github", "workflows", "publish.yml"), ConnectToolTests.TemplatesWorkflow);
         var proc = new FakeProcessRunner().On("git status --porcelain", stdout: "");
         string answer = await new ExtensionStoreTools(proc, new FakeStoreClient(), new StoreTokenProvider()).PublishExtension("1.0.0", _dir);
-        Assert.StartsWith("ERROR", answer);
-        Assert.Contains("src/", answer);
-        Assert.DoesNotContain(proc.Calls, c => c.StartsWith("git tag"));
+        Assert.StartsWith($"ERROR: the project is at {_dir}, but the template's workflow (.github/workflows/publish.yml) builds src/", answer);
+        Assert.Empty(proc.Calls);
+        Assert.False(File.Exists(Path.Combine(_dir, "package.info.json")));
     }
 }

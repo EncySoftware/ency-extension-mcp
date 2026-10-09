@@ -74,6 +74,19 @@ public class PackageCheckTests
         Assert.False(answered.Legacy);
     }
 
+    /**
+     * Which package.info.json the store reads — the first entry ending in it — is recorded with or without
+     * an answer in it: connect_to_store names that file for the answer instead of asking for a second one.
+     */
+    [Fact]
+    public void The_package_info_json_the_store_reads_is_named_with_or_without_an_answer()
+    {
+        var f = PackageCheck.Read(Nupkg(declared: false));
+        Assert.Equal("build/package.info.json", f.ManifestEntry);
+        Assert.Null(f.Declaration);
+        Assert.Null(PackageCheck.Read(Nupkg(sdk: null)).ManifestEntry);
+    }
+
     [Fact]
     public void Missing_marker_manifest_or_assembly_stops_the_publish()
     {

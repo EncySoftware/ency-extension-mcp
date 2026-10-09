@@ -141,6 +141,42 @@ public static class StoreWorkflow
             .Where(f => !Path.GetFileName(f).Equals(FileName, StringComparison.OrdinalIgnoreCase))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
 
+    /** The file names of the workflows in a folder, other than this one, that a version tag push starts. */
+    public static List<string> TagWorkflows(string dir) =>
+        Workflows(dir).Where(f => Read(f) is { } t && StartsOnVersionTag(t)).Select(f => Path.GetFileName(f)).ToList();
+
+    /** "a", "a and b", "a, b and c". */
+    public static string Listed(IReadOnlyList<string> items) =>
+        items.Count <= 1 ? string.Join("", items) : string.Join(", ", items.SkipLast(1)) + " and " + items[^1];
+
+    /** The name GitHub lists a workflow under in the Actions tab: its `name:`, else its file name. */
+    public static string DisplayName(string workflowFile)
+    {
+        var m = Read(workflowFile) is { } yaml
+            ? Regex.Match(yaml, @"^name:[ \t]*(?<n>[^\r\n]*?)[ \t]*(?:[ \t]#[^\r\n]*)?\r?$", RegexOptions.Multiline) : null;
+        string name = m is { Success: true } ? m.Groups["n"].Value.Trim().Trim('"', '\'').Trim() : "";
+        return name.Length > 0 ? name : Path.GetFileName(workflowFile);
+    }
+
+    /**
+     * How a person starts a workflow, read from its `on:` block: a version tag, Actions -> Run workflow,
+     * or both — for the sentences that send an author to a workflow of their own.
+     */
+    public static string HowItStarts(string workflowFile)
+    {
+        string? yaml = Read(workflowFile);
+        bool? tag = yaml == null ? null : TagTrigger(yaml);
+        bool? hand = yaml == null ? null : RunsByHand(yaml);
+        string run = $"Actions -> \"{DisplayName(workflowFile)}\" -> Run workflow on GitHub";
+        return (tag, hand) switch
+        {
+            (true, true) => $"a version tag (vX.Y.Z), or {run}",
+            (true, _) => "a version tag (vX.Y.Z)",
+            (_, true) => run,
+            _ => "the way its on: block says",
+        };
+    }
+
     private static string Normalize(string path)
     {
         string p = path.Trim().Replace('\\', '/');
@@ -154,48 +190,91 @@ public static class StoreWorkflow
     private static readonly string[] VersionTags = { "v0.1.0", "v1.0.0", "v1.2.3", "v10.20.30" };
 
     /**
+     * Whether pushing a version tag (vX.Y.Z) starts this workflow — see TagTrigger. False when that
+     * cannot be told: then nothing is claimed.
+     */
+    public static bool StartsOnVersionTag(string yaml) => TagTrigger(yaml) == true;
+
+    /**
      * Whether pushing a version tag (vX.Y.Z) starts this workflow, from the structure of its `on:` block
      * — a string, a list or a map — never from a `tags:` line anywhere in the file (a docker step's
      * `with: tags:` is one). GitHub's rule: on.push with tags runs for a tag they match, with
      * tags-ignore for a tag they do not; on.push with none of branches, branches-ignore, tags and
      * tags-ignore runs for every tag (path filters are not applied to tag pushes); on.push with only
-     * branches or branches-ignore never runs for a tag. `create` runs for every new tag. False when
-     * the block cannot be read: then nothing is claimed.
+     * branches or branches-ignore never runs for a tag. `create` runs for every new tag. Null when the
+     * part of the block that decides it cannot be read (an alias, a construct this reader does not take
+     * apart): then nothing is claimed either way.
      */
-    public static bool StartsOnVersionTag(string yaml)
+    public static bool? TagTrigger(string yaml)
     {
         // A reader of a subset: whatever it cannot read is no claim, never a failed answer.
-        try { return StartsOnVersionTag(Trigger.On(yaml)); }
-        catch (Exception) { return false; }
+        try { return TagTrigger(Trigger.On(yaml)); }
+        catch (Exception) { return null; }
     }
 
-    private static bool StartsOnVersionTag(Trigger.Node? on)
+    /** TagTrigger of a workflow file; null when the file cannot be read either. */
+    public static bool? TagTriggerOf(string workflowFile) => Read(workflowFile) is { } yaml ? TagTrigger(yaml) : null;
+
+    /** RunsByHand of a workflow file; null when the file cannot be read either. */
+    public static bool? RunsByHandOf(string workflowFile) => Read(workflowFile) is { } yaml ? RunsByHand(yaml) : null;
+
+    /** Whether GitHub offers Actions -> Run workflow for it: its `on:` block names workflow_dispatch. Null when that cannot be told. */
+    public static bool? RunsByHand(string yaml)
     {
-        if (on == null) return false;
+        try
+        {
+            if (Events(Trigger.On(yaml)) is not { } on) return null;
+            return on.Events.ContainsKey("workflow_dispatch") ? true : on.Partial ? null : false;
+        }
+        catch (Exception) { return null; }
+    }
+
+    /** The events an `on:` value names, with what each holds; Partial when some of the list could not be read. */
+    private sealed record EventSet(Dictionary<string, Trigger.Node?> Events, bool Partial);
+
+    private static EventSet? Events(Trigger.Node? on)
+    {
         var events = new Dictionary<string, Trigger.Node?>(StringComparer.Ordinal);
+        bool partial = false;
         switch (on)
         {
-            case Trigger.Scalar s when s.Value != null: events[s.Value] = null; break;
+            case null: break;   // no `on:` at all: GitHub runs it for nothing
+            case Trigger.Unknown: return null;
+            case Trigger.Scalar s: if (s.Value != null) events[s.Value] = null; break;
             case Trigger.Seq q:
-                foreach (var item in q.Items) if (item is Trigger.Scalar { Value: { } name }) events[name] = null;
+                foreach (var item in q.Items)
+                    if (item is Trigger.Scalar { Value: { } name }) events[name] = null;
+                    else if (item is Trigger.Unknown) partial = true;
                 break;
             case Trigger.Map m:
                 foreach (var (key, value) in m.Entries) events[key] = value;
                 break;
         }
+        return new EventSet(events, partial);
+    }
+
+    private static bool? TagTrigger(Trigger.Node? on)
+    {
+        if (Events(on) is not { } set) return null;
+        var events = set.Events;
         if (events.ContainsKey("create")) return true;
-        if (!events.TryGetValue("push", out var push)) return false;
+        if (!events.TryGetValue("push", out var push)) return set.Partial ? null : false;
+        if (push is Trigger.Unknown) return null;
         if (push is null or Trigger.Scalar { Value: null }) return true;
         if (push is not Trigger.Map filters) return false;
 
         var keys = new Dictionary<string, Trigger.Node?>(StringComparer.Ordinal);
         foreach (var (key, value) in filters.Entries) keys[key] = value;
         if (keys.TryGetValue("tags", out var tags))
-            return Patterns(tags) is { } p && VersionTags.Any(t => FilterMatches(p, t));
+            return Unread(tags) ? null : Patterns(tags) is { } p && VersionTags.Any(t => FilterMatches(p, t));
         if (keys.TryGetValue("tags-ignore", out var ignore))
-            return Patterns(ignore) is { } p && VersionTags.Any(t => !FilterMatches(p, t));
+            return Unread(ignore) ? null : Patterns(ignore) is { } p && VersionTags.Any(t => !FilterMatches(p, t));
         return !keys.ContainsKey("branches") && !keys.ContainsKey("branches-ignore");
     }
+
+    /** A value, or an item of a list, this reader could not read. */
+    private static bool Unread(Trigger.Node? node) =>
+        node is Trigger.Unknown || (node is Trigger.Seq q && q.Items.Any(i => i is Trigger.Unknown));
 
     private static List<string>? Patterns(Trigger.Node? node) => node switch
     {
@@ -244,8 +323,12 @@ public static class StoreWorkflow
 
     /**
      * Just enough YAML to read a workflow's `on:` value: block maps and lists by indentation, flow
-     * `[...]` and `{...}`, plain and quoted scalars, comments. Anchors, tags and block scalars are not
-     * read — an `on:` block does not use them; a FormatException says this one did.
+     * `[...]` and `{...}` (an entry `key: value` in a list is a map of one pair), plain scalars over
+     * several lines, quoted scalars, comments, anchors and tags (dropped: they say nothing about the
+     * value). A block scalar (`|`, `>`) is skipped as text, an alias is not followed: both read as
+     * Unknown, which decides nothing. What it cannot take apart throws a FormatException — never a
+     * loop: every step of a flow collection has to move on (review, 09.10.2026: `[cron: '0 6 * * 1']`
+     * held the reader in place until the process ran out of memory).
      */
     private static class Trigger
     {
@@ -253,8 +336,13 @@ public static class StoreWorkflow
         public sealed record Scalar(string? Value) : Node;
         public sealed record Seq(List<Node> Items) : Node;
         public sealed record Map(List<(string Key, Node? Value)> Entries) : Node;
+        /** Known to be there, not what it says: a block scalar, an alias. */
+        public sealed record Unknown(string What) : Node;
 
         private sealed record Line(int Indent, string Text);
+
+        /** `|` or `>`, with a chomping and an indentation indicator in either order. */
+        private static readonly Regex BlockScalar = new(@"^[|>](?:[+-]?[1-9]?|[1-9][+-])$", RegexOptions.Compiled);
 
         /** The value of the top-level `on` key; null when the file has none. */
         public static Node? On(string yaml)
@@ -279,19 +367,38 @@ public static class StoreWorkflow
         /** The value after `key:` — inline, or the block below it (a list may sit at the key's own indent). */
         private static Node? ValueOf(string rest, List<Line> lines, ref int i, int keyIndent)
         {
+            rest = WithoutProperties(rest);
             if (rest.Length > 0)
             {
-                // A plain scalar in block context keeps its brackets and commas: v[0-9]+.[0-9]+ is one pattern.
+                if (rest[0] == '*')
+                    return new Unknown("an alias");
+                // Its lines are text, whatever they look like: all of them sit deeper than the key.
+                if (BlockScalar.IsMatch(rest))
+                {
+                    while (i < lines.Count && lines[i].Indent > keyIndent) i++;
+                    return new Unknown("a block scalar");
+                }
+                // A plain scalar in block context keeps its brackets and commas: v[0-9]+.[0-9]+ is one
+                // pattern. It goes on over the lines below that sit deeper than its key.
                 if (rest[0] is not ('[' or '{' or '"' or '\''))
-                    return new Scalar(rest is "~" or "null" or "Null" or "NULL" ? null : rest);
-                // A flow collection may run over several lines.
+                {
+                    string plain = rest;
+                    while (i < lines.Count && lines[i].Indent > keyIndent) plain += " " + lines[i++].Text;
+                    return new Scalar(plain is "~" or "null" or "Null" or "NULL" ? null : plain);
+                }
+                // A flow collection, or a quoted scalar, may run over several lines.
                 string flow = rest;
-                if (flow[0] is '[' or '{')
-                    while (Depth(flow) > 0 && i < lines.Count) flow += " " + lines[i++].Text;
+                while (Open(flow) && i < lines.Count && lines[i].Indent > keyIndent) flow += " " + lines[i++].Text;
                 int at = 0;
                 var node = Flow(flow, ref at);
                 if (flow[at..].Trim().Length > 0) throw new FormatException("text after a value: " + flow);
                 return node;
+            }
+            // A value on the line below its key: `on:` then `  push`, or `  [push, pull_request]`.
+            if (i < lines.Count && lines[i].Indent > keyIndent && !IsItem(lines[i].Text) && SplitKey(lines[i].Text) == null)
+            {
+                string below = lines[i++].Text;
+                return ValueOf(below, lines, ref i, keyIndent);
             }
             if (i < lines.Count && (lines[i].Indent > keyIndent || (lines[i].Indent == keyIndent && IsItem(lines[i].Text))))
                 return Block(lines, ref i, lines[i].Indent);
@@ -310,7 +417,7 @@ public static class StoreWorkflow
                     i++;
                     if (item.Length == 0)
                         items.Add(i < lines.Count && lines[i].Indent > indent ? Block(lines, ref i, lines[i].Indent) : new Scalar(null));
-                    else if (item[0] is not ('[' or '{' or '"' or '\'') && SplitKey(item) is { } kv)
+                    else if (item[0] is not ('[' or '{' or '"' or '\'' or '&' or '!' or '*' or '|' or '>') && SplitKey(item) is { } kv)
                     {
                         // `- key: value` opens a map whose further keys sit under the first one.
                         lines.Insert(i, new Line(inner, item));
@@ -333,6 +440,20 @@ public static class StoreWorkflow
 
         private static bool IsItem(string text) => text == "-" || text.StartsWith("- ", StringComparison.Ordinal);
 
+        private static bool IsBlank(char c) => c is ' ' or '\t';
+
+        /** A value's anchor (&name) and tag (!name) taken off its front: neither says what the value is. */
+        private static string WithoutProperties(string text)
+        {
+            string t = text;
+            while (t.Length > 0 && t[0] is '&' or '!')
+            {
+                int end = t.IndexOfAny(new[] { ' ', '\t' });
+                t = end < 0 ? "" : t[end..].TrimStart(' ', '\t');
+            }
+            return t;
+        }
+
         /** `key: rest` with the key unquoted; null when the line is not a key. */
         private static (string Key, string Tail)? SplitKey(string text)
         {
@@ -341,7 +462,7 @@ public static class StoreWorkflow
             if (text.Length > 0 && text[0] is '"' or '\'')
             {
                 key = Quoted(text, ref at);
-                while (at < text.Length && text[at] == ' ') at++;
+                while (at < text.Length && IsBlank(text[at])) at++;
                 if (at >= text.Length || text[at] != ':') return null;
             }
             else
@@ -350,11 +471,11 @@ public static class StoreWorkflow
                 if (at < 0) return null;
                 key = text[..at].Trim();
             }
-            if (at + 1 < text.Length && text[at + 1] != ' ') return null;
+            if (at + 1 < text.Length && !IsBlank(text[at + 1])) return null;
             return (key, text[(at + 1)..].Trim());
         }
 
-        /** The first ': ' (or a ':' ending the text) outside brackets — where a plain key ends. */
+        /** The first ': ' (or a ':' ending the text; a tab counts as a space) outside brackets — where a plain key ends. */
         private static int IndexOfColon(string text)
         {
             int depth = 0;
@@ -362,16 +483,32 @@ public static class StoreWorkflow
             {
                 if (text[i] is '[' or '{') depth++;
                 else if (text[i] is ']' or '}') depth--;
-                else if (text[i] == ':' && depth == 0 && (i + 1 == text.Length || text[i + 1] == ' ')) return i;
+                else if (text[i] == ':' && depth == 0 && (i + 1 == text.Length || IsBlank(text[i + 1]))) return i;
             }
             return -1;
         }
 
+        private static void SkipBlanks(string s, ref int at)
+        {
+            while (at < s.Length && IsBlank(s[at])) at++;
+        }
+
         private static Node Flow(string s, ref int at)
         {
-            while (at < s.Length && s[at] == ' ') at++;
+            SkipBlanks(s, ref at);
+            // An anchor or a tag in front of a node: dropped, like in block context.
+            while (at < s.Length && s[at] is '&' or '!')
+            {
+                while (at < s.Length && !IsBlank(s[at]) && s[at] is not (',' or '[' or ']' or '{' or '}')) at++;
+                SkipBlanks(s, ref at);
+            }
             if (at >= s.Length) return new Scalar(null);
             char c = s[at];
+            if (c == '*')
+            {
+                while (at < s.Length && !IsBlank(s[at]) && s[at] is not (',' or ']' or '}')) at++;
+                return new Unknown("an alias");
+            }
             if (c is '[' or '{')
             {
                 at++;
@@ -379,26 +516,30 @@ public static class StoreWorkflow
                 var entries = new List<(string, Node?)>();
                 while (true)
                 {
-                    while (at < s.Length && s[at] == ' ') at++;
+                    SkipBlanks(s, ref at);
                     if (at >= s.Length) throw new FormatException("unclosed " + c);
                     if (s[at] is ']' or '}') { at++; break; }
-                    if (c == '{')
-                    {
-                        var key = Flow(s, ref at) as Scalar;
-                        while (at < s.Length && s[at] == ' ') at++;
-                        Node? value = null;
-                        if (at < s.Length && s[at] == ':') { at++; value = Flow(s, ref at); }
-                        entries.Add((key?.Value ?? "", value));
-                    }
-                    else items.Add(Flow(s, ref at));
-                    while (at < s.Length && s[at] == ' ') at++;
+                    int before = at;
+                    var first = Flow(s, ref at);
+                    SkipBlanks(s, ref at);
+                    // `key: value` — every entry of a {...}; in a [...] a map of one pair, as in
+                    // `schedule: [cron: '0 6 * * 1']`.
+                    bool pair = at < s.Length && s[at] == ':';
+                    Node? value = null;
+                    if (pair) { at++; value = Flow(s, ref at); }
+                    string key = first is Scalar { Value: { } k } ? k : "";
+                    if (c == '{') entries.Add((key, value));
+                    else items.Add(pair ? new Map(new List<(string, Node?)> { (key, value) }) : first);
+                    SkipBlanks(s, ref at);
                     if (at < s.Length && s[at] == ',') at++;
+                    // What this reader cannot take apart must not hold it in place: no step, no claim.
+                    if (at == before) throw new FormatException("cannot read past: " + s[at..]);
                 }
                 return c == '[' ? new Seq(items) : new Map(entries);
             }
             if (c is '"' or '\'') return new Scalar(Quoted(s, ref at));
             int start = at;
-            while (at < s.Length && s[at] is not (',' or ']' or '}') && !(s[at] == ':' && (at + 1 == s.Length || s[at + 1] == ' '))) at++;
+            while (at < s.Length && s[at] is not (',' or ']' or '}') && !(s[at] == ':' && (at + 1 == s.Length || IsBlank(s[at + 1])))) at++;
             string plain = s[start..at].Trim();
             return new Scalar(plain is "" or "~" or "null" or "Null" or "NULL" ? null : plain);
         }
@@ -430,24 +571,37 @@ public static class StoreWorkflow
                     if (c == quote) quote = '\0';
                     else if (quote == '"' && c == '\\') i++;
                 }
-                else if (c is '"' or '\'' && (i == 0 || line[i - 1] is ' ' or '[' or '{' or ',' or ':')) quote = c;
-                else if (c == '#' && (i == 0 || line[i - 1] is ' ' or '\t')) return line[..i];
+                else if (c is '"' or '\'' && (i == 0 || line[i - 1] is ' ' or '\t' or '[' or '{' or ',' or ':')) quote = c;
+                else if (c == '#' && (i == 0 || IsBlank(line[i - 1]))) return line[..i];
             }
             return line;
         }
 
-        private static int Depth(string s)
+        /**
+         * Whether a bracket or a quote is still open at the end of the text. A quote opens a scalar only
+         * where a node starts — at the front, or after [ { , or : — so the apostrophe in `[it's]` does not.
+         */
+        private static bool Open(string s)
         {
             int depth = 0;
             char quote = '\0';
-            foreach (char c in s)
+            char last = '\0';   // the last character outside quotes that is not a blank
+            for (int i = 0; i < s.Length; i++)
             {
-                if (quote != '\0') { if (c == quote) quote = '\0'; }
-                else if (c is '"' or '\'') quote = c;
+                char c = s[i];
+                if (quote != '\0')
+                {
+                    if (quote == '\'' && c == '\'' && i + 1 < s.Length && s[i + 1] == '\'') i++;
+                    else if (quote == '"' && c == '\\') i++;
+                    else if (c == quote) { quote = '\0'; last = c; }
+                    continue;
+                }
+                if (c is '"' or '\'' && last is '\0' or '[' or '{' or ',' or ':') quote = c;
                 else if (c is '[' or '{') depth++;
                 else if (c is ']' or '}') depth--;
+                if (!IsBlank(c) && quote == '\0') last = c;
             }
-            return depth;
+            return depth > 0 || quote != '\0';
         }
     }
 

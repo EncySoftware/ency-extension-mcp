@@ -164,7 +164,9 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         "is, and nothing in the project is touched. Otherwise the project is under src/ and need not come " +
         "from the template: a missing package.info.json is written from the csproj and the store's marker " +
         "tag added, committed before the tag. New extensions land hidden until a store moderator approves. " +
-        "Requires a clean working tree unless commitAll is true. For a repository whose project is " +
+        "Requires a clean working tree unless commitAll is true. Tags nothing where no workflow publishes to " +
+        "the store, or where the one that does is not started by a version tag. The tag goes to the " +
+        "repository's GitHub remote. For a repository whose project is " +
         "not under src/ and is packed with `dotnet pack` (not made from the template), call " +
         "connect_to_store first: it adds a workflow of its own that a version tag starts.")]
     public async Task<string> PublishExtension(
@@ -202,6 +204,38 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
             return $"ERROR: '{version}' is not a semver version (expected like 1.2.3).";
         var tag = $"v{version}";
 
+        // A tag that publishes nothing is not pushed. Where no workflow publishes to the store it may well
+        // start others — a nuget.org push, say — and the answer said "building and publishing" all the same;
+        // a workflow of the author's own that only Run workflow starts got the tag too, and the run reported
+        // was an older one (review, 09.10.2026). Both before anything is committed.
+        string root = GitRepository.Root(dir) ?? dir;
+        if (publishing == null) return "ERROR: " + NoStoreWorkflow(root) + " Nothing was tagged.";
+        if (StoreWorkflow.TagTriggerOf(publishing) == false) return "ERROR: " + NotOnTag(publishing);
+
+        // The template's workflow builds src/ — that is the one thing about the layout it insists on. What it
+        // does NOT insist on any more is the template's csproj: the manifest is written from the author's own
+        // project when missing, and the marker tag added, so a project brought from elsewhere publishes as it
+        // is. Where the project sits is read before anything is committed; the manifest is written after the
+        // clean-tree check, and committed, for the same reason the category is: a refused publish must not
+        // leave an edit behind. A project nowhere in src/ or at the root used to pass unseen (review, 09.10.2026).
+        Project? project = null;
+        if (connected == null)
+        {
+            project = ProjectLayout.Locate(dir, out var layoutError);
+            if (layoutError != null) return "ERROR: " + layoutError;
+            if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
+                return "ERROR: " + OutsideSrc(new[] { project.Dir }, publishing);
+            if (project == null)
+            {
+                var elsewhere = ConnectTools.FindExtensionProjects(root).Select(c => Path.GetDirectoryName(c.Path)!).ToList();
+                if (elsewhere.Count > 0) return "ERROR: " + OutsideSrc(elsewhere, publishing);
+                if (StoreWorkflow.IsTemplates(publishing))
+                    return $"ERROR: the template's workflow (.github/workflows/{Path.GetFileName(publishing)}) builds src/, and there is no "
+                         + $"csproj in {Path.Combine(dir, "src")} - nor an extension project anywhere else in the repository - so its run "
+                         + "would have nothing to build. Put the project in src/. Nothing was tagged.";
+            }
+        }
+
         var status = await proc.Run("git", "status --porcelain", dir);
         if (!status.Ok) return $"ERROR: not a git repo? {status.StdErr.Trim()}";
         if (!string.IsNullOrWhiteSpace(status.StdOut))
@@ -214,19 +248,6 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
             if (!c.Ok) return $"ERROR: commit failed:\n{c.Output.Trim()}";
         }
 
-        // The workflow builds src/ — that is the one thing about the layout it insists on. What it
-        // does NOT insist on any more is the template's csproj: the manifest is written from the
-        // author's own project when missing, and the marker tag added, so a project brought from
-        // elsewhere publishes as it is. After the clean-tree check, and committed, for the same
-        // reason the category is: a refused publish must not leave an edit behind.
-        Project? project = null;
-        if (connected == null)
-        {
-            project = ProjectLayout.Locate(dir, out var layoutError);
-            if (layoutError != null) return "ERROR: " + layoutError;
-            if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
-                return "ERROR: " + OutsideSrc(project.Dir, dir, publishing);
-        }
         var adopted = new List<string>();
         if (project != null) ProjectLayout.Adopt(project, adopted);
         string? adoptNote = null;
@@ -267,27 +288,33 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         // "other" until somebody sorts it — and the next publish with a category fills the gap, because
         // the store's hint only ever fills an EMPTY category. But it used to happen in silence, and
         // half the catalogue ended up unsorted that way (11 of 23 on 16.09.2026).
-        else if (connected == null && UnsortedNote(PackageInfo.ReadCategory(dir)) is { } unsorted)
+        // Only about the manifest of a project in src/: elsewhere there is no src/package.info.json to name.
+        else if (project != null && UnsortedNote(PackageInfo.ReadCategory(dir)) is { } unsorted)
             categoryNote = unsorted + " Known: " + string.Join(", ", (await store.GetCategories()).Select(k => k.Id));
 
         var existing = await proc.Run("git", $"rev-parse -q --verify refs/tags/{tag}", dir);
         if (existing.Ok)
             return $"ERROR: tag {tag} already exists — bump the version.";
 
+        // To the remote on GitHub, where the run happens: a mirror beside another origin got nothing when
+        // the tag went to origin, and publish_status then found no run (review, 09.10.2026).
+        var gitHub = GitRepository.GitHubRemote(GitRepository.Remotes(root));
+        string remote = gitHub?.Name ?? "origin";
         var t = await proc.Run("git", $"tag {tag}", dir);
         if (!t.Ok) return $"ERROR: tagging failed:\n{t.StdErr.Trim()}";
-        var pushBranch = await proc.Run("git", "push origin HEAD", dir);
+        var pushBranch = await proc.Run("git", $"push {remote} HEAD", dir);
         if (!pushBranch.Ok) return $"ERROR: branch push failed:\n{pushBranch.StdErr.Trim()}";
-        var pushTag = await proc.Run("git", $"push origin {tag}", dir);
+        var pushTag = await proc.Run("git", $"push {remote} {tag}", dir);
         if (!pushTag.Ok) return $"ERROR: tag push failed:\n{pushTag.StdErr.Trim()}";
+        string pushedTo = remote == "origin" ? "" : $" to {remote} ({gitHub!.GitHub}, the repository's GitHub remote)";
 
         await Task.Delay(4000); // give Actions a moment to register the run
-        var run = await LatestRun(dir, publishing != null ? Path.GetFileName(publishing) : WorkflowFile);
+        var run = await RunOfTag(dir, Path.GetFileName(publishing), tag);
 
         return await WithUpdateNote($"""
-            Pushed {tag} — GitHub Actions is building and publishing.{(adoptNote != null ? " " + adoptNote + "." : "")}{(categoryNote != null ? " " + categoryNote + "." : "")}
+            Pushed {tag}{pushedTo} — GitHub Actions is building and publishing.{(adoptNote != null ? " " + adoptNote + "." : "")}{(categoryNote != null ? " " + categoryNote + "." : "")}
             {(chosenNote != null ? chosenNote + "\n" : "")}
-            {(run != null ? $"workflow run: {run.Value.Url} ({run.Value.Status})" : "the workflow run has not registered yet")}
+            {(run != null ? $"workflow run: {run.Value.Url} ({run.Value.Status})" : $"the run of {Path.GetFileName(publishing)} for {tag} has not registered yet")}
 
             Call publish_status to follow it to the store card.
             """);
@@ -315,22 +342,48 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
     /**
      * Why a project outside src/ is not this tool's to tag, with the route that does take it. Never one
      * that sends it back here: connect_to_store refuses a repository that publishes already, so it is
-     * named only where no workflow publishes, or once the template's is deleted (review, 09.10.2026).
+     * named only once the template's workflow is deleted (review, 09.10.2026). A repository where no
+     * workflow publishes never gets this far: NoStoreWorkflow says what gives it one.
      */
-    private static string OutsideSrc(string projectDir, string dir, string? publishing)
+    private static string OutsideSrc(IReadOnlyList<string> projectDirs, string publishing)
     {
-        if (publishing == null)
-            return $"the project is at {projectDir}, but the publish workflow builds src/ — move it under src/, "
-                 + "or let connect_to_store give this repository a workflow that packs the project where it is "
-                 + "(or publish this build with publish_package, which takes any folder).";
+        string at = projectDirs.Count == 1 ? $"the project is at {projectDirs[0]}"
+                  : $"the extension projects are at {StoreWorkflow.Listed(projectDirs)}";
         string file = Path.GetFileName(publishing);
         if (StoreWorkflow.IsTemplates(publishing))
-            return $"the project is at {projectDir}, but the template's workflow (.github/workflows/{file}) builds src/ — move the "
+            return $"{at}, but the template's workflow (.github/workflows/{file}) builds src/ — move the "
                  + $"project under src/; or, to publish it where it is, delete {file} and let connect_to_store give this repository "
                  + "a workflow that packs it there (or publish this build with publish_package, which takes any folder).";
-        return $"the project is at {projectDir}, and this repository publishes through .github/workflows/{file}, not through the "
+        return $"{at}, and this repository publishes through .github/workflows/{file}, not through the "
              + "template's workflow, which builds src/ and is the one this tool tags for. Publish by starting "
-             + $"{file} the way it runs: a tag push, or Actions -> Run workflow on GitHub.";
+             + $"{file}: {StoreWorkflow.HowItStarts(publishing)}.";
+    }
+
+    /**
+     * Why a version tag would publish nothing in this repository, the workflows it would start all the
+     * same, and which tool gives the repository one that publishes: publish_status says the same.
+     */
+    private static string NoStoreWorkflow(string root)
+    {
+        var started = StoreWorkflow.TagWorkflows(Path.Combine(root, ".github", "workflows"));
+        return "no workflow in this repository publishes to the store (none uses publish-extension-action), so a version tag "
+             + "publishes nothing there"
+             + (started.Count == 0 ? "" : $" - it starts {StoreWorkflow.Listed(started)}, which "
+                                         + (started.Count == 1 ? "does" : "do") + " not publish to the store")
+             + ". A project packed with `dotnet pack` gets a workflow of its own from connect_to_store; a project in the "
+             + "template's src/ layout gets the template's back from update_extension.";
+    }
+
+    /** Why a workflow that publishes but that a version tag does not start is not tagged for. */
+    private static string NotOnTag(string publishing)
+    {
+        string file = Path.GetFileName(publishing);
+        return $"this repository publishes through .github/workflows/{file}, and a version tag does not start it (its on: block "
+             + "has no tag trigger), so a tag would publish nothing. "
+             + (StoreWorkflow.RunsByHandOf(publishing) == true
+                 ? $"Start it on GitHub: Actions -> \"{StoreWorkflow.DisplayName(publishing)}\" -> Run workflow."
+                 : "Start it the way its on: block says.")
+             + " Nothing was tagged.";
     }
 
     /** The note for a manifest that names no category (or the default one); null when it does. */
@@ -355,19 +408,18 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         string? publishing = PublishingWorkflow(dir, connected);
         var run = await LatestRun(dir, publishing != null ? Path.GetFileName(publishing) : WorkflowFile);
         // Sent to publish_extension only where its tag starts the run to follow: in a repository where no
-        // workflow publishes, that sent the author round in a circle (review, 09.10.2026).
+        // workflow publishes, that sent the author round in a circle (review, 09.10.2026). And a tag is not
+        // said to start nothing where it starts other workflows — a nuget.org push, say.
         if (run == null)
             return connected != null
                 ? $"No run of {StoreWorkflow.FileName} found yet — push a v* tag (publish_extension does it), or start it on "
                   + "GitHub: Actions -> \"Publish to ENCY Extension Store\" -> Run workflow."
                 : publishing == null
-                ? "No publish workflow runs found, and no workflow in this repository publishes to the store (none uses "
-                  + "publish-extension-action), so a v* tag starts nothing. A project packed with `dotnet pack` gets one from "
-                  + "connect_to_store; a project in the template's src/ layout gets the template's back from update_extension."
+                ? "No publish workflow runs found, and " + NoStoreWorkflow(GitRepository.Root(dir) ?? dir)
                 : StoreWorkflow.IsTemplates(publishing)
                 ? "No publish workflow runs found — did you call publish_extension (push a v* tag)?"
-                : $"No run of {Path.GetFileName(publishing)} found yet — this repository publishes through it: start it the way "
-                  + "it runs, a tag push or Actions -> Run workflow on GitHub.";
+                : $"No run of {Path.GetFileName(publishing)} found yet — this repository publishes through it. Start it: "
+                  + $"{StoreWorkflow.HowItStarts(publishing)}.";
 
         var sb = new StringBuilder();
         var r = run.Value;
@@ -463,6 +515,35 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
     }
 
     private record struct RunInfo(long Id, string Status, string? Conclusion, string Url);
+
+    /**
+     * The run a tag push started: the newest run of the workflow from a push whose ref is that tag; null
+     * until GitHub has one. The newest run of the workflow alone may be an older one — a manual run,
+     * or the last tag's — reported as this publish (review, 09.10.2026).
+     */
+    private async Task<RunInfo?> RunOfTag(string repoDir, string workflow, string tag)
+    {
+        var res = await proc.Run("gh",
+            $"run list --workflow {workflow} --limit 20 --json databaseId,status,conclusion,url,headBranch,event", repoDir);
+        if (!res.Ok) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(res.StdOut);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (!e.TryGetProperty("headBranch", out var b) || b.GetString() != tag
+                    || !e.TryGetProperty("event", out var ev) || ev.GetString() != "push"
+                    || !e.TryGetProperty("databaseId", out var id) || !id.TryGetInt64(out long runId)) continue;
+                return new RunInfo(runId,
+                    e.TryGetProperty("status", out var s) ? s.GetString() ?? "unknown" : "unknown",
+                    e.TryGetProperty("conclusion", out var c) ? c.GetString() : null,
+                    e.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "");
+            }
+            return null;
+        }
+        catch (JsonException) { return null; }
+    }
 
     private async Task<RunInfo?> LatestRun(string repoDir, string workflow)
     {

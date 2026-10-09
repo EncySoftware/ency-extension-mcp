@@ -109,11 +109,15 @@ public class CategoryArgumentTests
         Assert.True(commit < tag, "the category must be in the commit the tag points at");
     }
 
+    /** A repository of the template's shape: its workflow, the project in src/ and the manifest above. */
     private static string TempRepo()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ency-cat-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Path.Combine(dir, "src"));
         File.WriteAllText(PackageInfo.PathIn(dir), Manifest);
+        File.WriteAllText(Path.Combine(dir, "src", "MyExt.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Directory.CreateDirectory(Path.Combine(dir, ".github", "workflows"));
+        File.WriteAllText(Path.Combine(dir, ".github", "workflows", "publish.yml"), ConnectToolTests.TemplatesWorkflow);
         return dir;
     }
 }

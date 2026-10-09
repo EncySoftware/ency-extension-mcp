@@ -116,6 +116,12 @@ public class ConnectToolTests : IDisposable
                         + "start it as the card's owner", answer);
         Assert.Contains("After that every run from EncySoftware/DirectCladdingOperation is credited to that owner, whoever starts it.", answer);
         Assert.Contains("`ency-extension-mcp claim EncySoftware.DirectCladdingOperation EncySoftware/DirectCladdingOperation`", answer);
+        // Binding ahead: the account page shows Connect to a linked person only when a link with both fields
+        // brings them, and the store binds only for whoever linked the repository's owner (review, 09.10.2026).
+        Assert.Contains("https://apps.encycam.com/account?connect=EncySoftware.DirectCladdingOperation&repo=EncySoftware%2FDirectCladdingOperation "
+                        + "(press Connect there)", answer);
+        Assert.Contains("either works only for whoever linked EncySoftware, the repository's owner, through Sign in with GitHub.", answer);
+        Assert.DoesNotContain("Connect on https://apps.encycam.com/account,", answer);
         Assert.DoesNotContain("everyone who will run the workflow", answer);
         Assert.Contains("Own the card: EncySoftware.DirectCladdingOperation", answer);
         // The store has no transfer an author can start: said as what the author can do about it.
@@ -248,6 +254,64 @@ public class ConnectToolTests : IDisposable
         Assert.DoesNotContain("Newtonsoft", answer);
         Assert.DoesNotContain("SDK.Net 3.0.15 (", answer);
     }
+
+    /**
+     * A cache that got every package from the workflow's own two sources gives the run on GitHub nothing it
+     * cannot get: no caveat then. It stays where the cache cannot be read (the first test).
+     */
+    [Fact]
+    public async Task A_cache_filled_from_the_workflows_own_sources_is_no_caveat()
+    {
+        string cache = Path.Combine(_repo, "cache"), assets = Path.Combine(_repo, "project.assets.json");
+        string sdk = Path.Combine(cache, "encysoftware.camapi.sdk.net", "3.0.15");
+        Directory.CreateDirectory(sdk);
+        File.WriteAllText(Path.Combine(sdk, ".nupkg.metadata"),
+            "{\"version\": 2, \"contentHash\": \"x\", \"source\": \"https://nexus.encycam.com/repository/master/index.json\"}");
+        File.WriteAllText(assets, JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["libraries"] = new Dictionary<string, object>
+            {
+                ["EncySoftware.CAMAPI.SDK.Net/3.0.15"] = new { type = "package", path = "encysoftware.camapi.sdk.net/3.0.15" },
+            },
+            ["packageFolders"] = new Dictionary<string, object> { [cache + Path.DirectorySeparatorChar] = new { } },
+        }));
+
+        string answer = await Tools(Dotnet(assets: assets)).ConnectToStore(_repo);
+
+        Assert.StartsWith("Connected", answer);
+        Assert.DoesNotContain("this machine's cache", answer);
+        Assert.Equal(Array.Empty<string>(), ConnectTools.CachedFromElsewhere(assets));
+        Assert.Null(ConnectTools.CachedFromElsewhere(Path.Combine(_repo, "none.json")));
+    }
+
+    /** Files the build has none of are said once per folder, and the notes are capped: eleven pictures made eleven lines. */
+    [Fact]
+    public async Task Files_the_build_lacks_are_noted_once_per_folder()
+    {
+        // Bytes no file of the build has: a copy found elsewhere in it would be a failure, not a note.
+        var extra = Enumerable.Range(1, 11).Select(i => ($"build/Hints/Hints/hint-{i:00}.png", $"hint {i}, not in the build")).ToArray();
+
+        string answer = await Tools(Dotnet(extra: extra)).ConnectToStore(_repo);
+
+        Assert.StartsWith("Connected", answer);
+        Assert.Contains("  - note: 11 files from build/Hints/Hints/ land under Hints/Hints/ (hint-01.png, hint-02.png, hint-03.png, "
+                        + "hint-04.png and 7 more); the Release build has none of them.", answer);
+        Assert.DoesNotContain("hint-05.png", answer);
+    }
+
+    /**
+     * The terminal takes the csproj the way the answers name it, csproj=<...>, as well as --csproj: typed as
+     * an answer said it, it used to be dropped without a word.
+     */
+    [Theory]
+    [InlineData(new[] { "C:/r" }, "C:/r", null)]
+    [InlineData(new[] { "C:/r", "--csproj", "a/A.csproj" }, "C:/r", "a/A.csproj")]
+    [InlineData(new[] { "--csproj", "a/A.csproj", "C:/r" }, "C:/r", "a/A.csproj")]
+    [InlineData(new[] { "C:/r", "csproj=a/A.csproj" }, "C:/r", "a/A.csproj")]
+    [InlineData(new[] { "csproj=a/A.csproj" }, null, "a/A.csproj")]
+    [InlineData(new[] { "--csproj=a/A.csproj", "path=C:/r" }, "C:/r", "a/A.csproj")]
+    public void The_command_line_takes_the_csproj_the_way_the_answers_name_it(string[] args, string? path, string? csproj) =>
+        Assert.Equal((path, csproj), ConnectTools.CommandLine(args));
 
     [Theory]
     [InlineData("https://api.nuget.org/v3/index.json", true)]
@@ -456,12 +520,35 @@ public class ConnectToolTests : IDisposable
         string answer = await Tools(proc).ConnectToStore(_repo);
 
         Assert.StartsWith($"ERROR: this repository publishes to the store already, through .github/workflows/{file} (it uses "
-                          + "publish-extension-action), so there is nothing to connect: a version is published by starting that workflow.", answer);
+                          + "publish-extension-action), so there is nothing to connect: a version is published by starting that workflow - ", answer);
         Assert.DoesNotContain("update_extension", answer);
         Assert.DoesNotContain("publish_extension", answer);
+        // ...and what its csproj packs that the store tab in ENCY would not install, said all the same: check_package
+        // sends such a package here, and "nothing to connect" alone was where that route ended (review, 09.10.2026).
+        Assert.Contains($"But if {file} publishes what `dotnet pack` makes of project/main/DirectCladdingOperationExtension.csproj, "
+                        + "that package would not install right: the store installer in ENCY keeps contentFiles/", answer);
+        Assert.Contains("  - line 29 (SmartHintImages\\*.png): PackagePath \"contentFiles\\any\\any\\SmartHintImages\\\" -> \"build\\\"", answer);
+        Assert.Contains($"Or delete {file} and call connect_to_store again", answer);
+        Assert.EndsWith("Nothing was changed.", answer);
         Assert.Empty(proc.Calls);
         Assert.False(File.Exists(Workflow));
         Assert.Equal(DcoFixture.Bytes, File.ReadAllBytes(Csproj));
+    }
+
+    /** How the author's own workflow starts, from its on: block; a csproj that packs nothing wrong gets no list. */
+    [Fact]
+    public async Task A_workflow_of_the_authors_own_is_named_with_how_it_starts()
+    {
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "store.yml"),
+            "name: Store\non: workflow_dispatch\njobs:\n  p:\n    steps:\n      - uses: EncySoftware/publish-extension-action@v1\n");
+        File.WriteAllBytes(Csproj, DcoFixture.FixedBytes);
+
+        string answer = await Tools(Dotnet()).ConnectToStore(_repo);
+
+        Assert.StartsWith("ERROR: this repository publishes to the store already, through .github/workflows/store.yml (it uses "
+                          + "publish-extension-action), so there is nothing to connect: a version is published by starting that workflow - "
+                          + "Actions -> \"Store\" -> Run workflow on GitHub. A second one would publish every version twice. Nothing was changed.", answer);
     }
 
     /** The template's workflow with the project in src/: the template's tools take it from there. */
@@ -596,7 +683,10 @@ public class ConnectToolTests : IDisposable
         Assert.Equal("name: old\n", File.ReadAllText(Workflow));
     }
 
-    /** A GitHub mirror next to another origin is where the workflow runs. */
+    /**
+     * A GitHub mirror next to another origin is where the workflow runs — and where the tag goes: pushed to
+     * origin, it never reached the mirror, and publish_status found no run (review, 09.10.2026).
+     */
     [Fact]
     public async Task A_GitHub_mirror_is_where_the_workflow_runs()
     {
@@ -607,6 +697,18 @@ public class ConnectToolTests : IDisposable
         Assert.StartsWith("Connected", answer);
         Assert.Contains("the GitHub repository EncySoftware/DirectCladdingOperation publishes it", answer);
         Assert.True(File.Exists(Workflow));
+        Assert.Contains("  - commit and push the changes above to github;", answer);
+        Assert.Contains("git tag vX.Y.Z, then git push github vX.Y.Z", answer);
+        Assert.DoesNotContain("git push origin", answer);
+
+        // publish_extension pushes to the same remote.
+        var push = new FakeProcessRunner().On("git status --porcelain").On("git rev-parse", exit: 1).On("git tag").On("git push")
+            .On("gh run list", stdout: "[]");
+        string published = await new ExtensionStoreTools(push, _store, new FakeStoreAuth { Token = null }).PublishExtension("1.0.0", repoDir: _repo);
+        Assert.StartsWith("Pushed v1.0.0 to github (EncySoftware/DirectCladdingOperation, the repository's GitHub remote)", published);
+        Assert.Contains("git push github HEAD", push.Calls);
+        Assert.Contains("git push github v1.0.0", push.Calls);
+        Assert.DoesNotContain(push.Calls, c => c.StartsWith("git push origin"));
     }
 
     // ---- what would stop the first publish
@@ -693,9 +795,62 @@ public class ConnectToolTests : IDisposable
     {
         string answer = await Tools(Dotnet(extra: ("build/package.info.json", "{ \"reservedFunctionality\": { \"none\": true } }"))).ConnectToStore(_repo);
 
-        Assert.Contains("answer; until then it publishes with a warning. The package's package.info.json has it in an earlier or broken form."
-                        + Environment.NewLine + "  The answer is `reservedDomains` in that file: [] when the extension provides none of", answer);
+        Assert.Contains("Schedule A: the package's build/package.info.json carries the answer in the earlier `reservedFunctionality` block, "
+                        + "which the store reads, with a warning, until 2026-10-31, and refuses from 2026-11-01." + Environment.NewLine
+                        + "  The answer is `reservedDomains` in that file instead: [] when the extension provides none of", answer);
         Assert.DoesNotContain("Pack it with", answer);
+        Assert.DoesNotContain("Before the first publish", answer);   // well-formed: it publishes until then
+        Assert.Contains("  This tool does not write it", answer);
+
+        string later = await Tools(Dotnet(extra: ("build/package.info.json", "{ \"reservedFunctionality\": { \"none\": true } }")),
+                                   new DateOnly(2026, 11, 2)).ConnectToStore(_repo);
+        Assert.Contains("Schedule A: since 2026-11-01 the store refuses the earlier `reservedFunctionality` block, which the package's "
+                        + "build/package.info.json carries.", later);
+    }
+
+    /**
+     * A package.info.json the package carries already, with no answer in it (only sdkVersion, or the
+     * template's earlier empty block): the key goes into that file. The advice to pack one next to the
+     * csproj made a second package.info.json — NuGet drops it (NU5118), or it hides behind the first, which
+     * the store reads (review, 09.10.2026).
+     */
+    [Theory]
+    [InlineData("{ \"sdkVersion\": \"3.0.15\", \"requiresRestart\": false }")]
+    [InlineData("{ \"reservedFunctionality\": { \"domain\": \"\", \"entitlement\": \"\" } }")]
+    public async Task A_package_info_json_without_the_answer_is_named_and_no_second_one_is_asked_for(string manifest)
+    {
+        string answer = await Tools(Dotnet(extra: ("build/package.info.json", manifest))).ConnectToStore(_repo);
+
+        Assert.Contains("Schedule A: from 2026-11-01 the store refuses a publish from CI that carries no Reserved Functionality answer; "
+                        + "until then it publishes with a warning." + Environment.NewLine
+                        + "  The answer is `reservedDomains` in the package.info.json the package carries (build/package.info.json): add it to "
+                        + "the file packed there - [] when the extension provides none of the areas", answer);
+        Assert.Contains("Never pack a second package.info.json beside it: the store reads only the first.", answer);
+        Assert.DoesNotContain("Pack it with", answer);
+        Assert.DoesNotContain("next to the csproj", answer);
+    }
+
+    /**
+     * An answer the store cannot take — a list it cannot read, an entry without its area or licence — is
+     * refused today, on every route: named before the first publish, never "until then it publishes with
+     * a warning" (LegalGate.manifestRefusal; review, 09.10.2026).
+     */
+    [Theory]
+    [InlineData("{ \"reservedDomains\": \"none\" }", "holds a Reserved Functionality answer the store cannot read (`reservedDomains` must be a list")]
+    [InlineData("{ \"reservedDomains\": [ { \"domain\": \"A-01\" } ] }", "an entry of `reservedDomains` in the package's build/package.info.json lacks \"domain\" or \"entitlement\"")]
+    [InlineData("{ \"reservedFunctionality\": { \"domain\": \"A-01\" } }", "the earlier `reservedFunctionality` block in the package's build/package.info.json lacks")]
+    public async Task An_answer_the_store_refuses_on_every_date_stops_the_first_publish(string manifest, string stop)
+    {
+        string answer = await Tools(Dotnet(extra: ("build/package.info.json", manifest))).ConnectToStore(_repo);
+
+        Assert.StartsWith("Connected", answer);
+        int before = answer.IndexOf("Before the first publish, in the project:", StringComparison.Ordinal);
+        Assert.True(before >= 0, answer);
+        Assert.True(answer.IndexOf(stop, StringComparison.Ordinal) > before, answer);
+        Assert.Contains("the store refuses", answer[before..answer.IndexOf("Once, in the browser", StringComparison.Ordinal)]);
+        Assert.Contains("Schedule A: the store refuses the answer the package's build/package.info.json carries, as it is written - see "
+                        + "\"Before the first publish\" above.", answer);
+        Assert.DoesNotContain("until then it publishes with a warning", answer);
         Assert.Contains("  This tool does not write it", answer);
     }
 
@@ -844,6 +999,39 @@ public class ConnectToolTests : IDisposable
 
         Assert.StartsWith("Connected ext/Ext.csproj", taken);
         Assert.Contains("dotnet pack \"ext/Ext.csproj\"", File.ReadAllText(Workflow));
+        // Taken, not found: every answer says so, on the line under the first.
+        const string note = "Took ext/Ext.csproj: it is the only csproj in ext/, and the search for one that references "
+                          + "EncySoftware.CAMAPI.SDK.Net or packs a *.settings.json found none. If it is not the extension, call "
+                          + "connect_to_store again with csproj=<its .csproj>.";
+        string lines = taken.Replace("\r\n", "\n");
+        Assert.StartsWith(lines.Split('\n')[0] + "\n" + note + "\n", lines);
+
+        // A failure most of all: "no manifest lands in the extension's folder" about a csproj nobody named.
+        File.Delete(Workflow);
+        string failed = await Tools(Dotnet("contentFiles")).ConnectToStore(ext);
+        Assert.StartsWith("ERROR: the check pack shows the package would not install right:", failed);
+        Assert.EndsWith(note, failed);
+        // Named or found, there is nothing to say.
+        Assert.DoesNotContain("Took ", await Tools(Dotnet()).ConnectToStore(_repo, "ext/Ext.csproj"));
+    }
+
+    /**
+     * A write of the workflow that fails leaves nothing behind — no half a file, no temporary one — and
+     * takes the csproj back (review, 09.10.2026: a partial publish_store.yml was not Revert's to delete).
+     */
+    [Fact]
+    public async Task A_workflow_that_cannot_be_written_leaves_nothing_behind()
+    {
+        Directory.CreateDirectory(Workflow);   // a folder where the file goes: the move onto it fails
+        var proc = Dotnet();
+
+        string answer = await Tools(proc).ConnectToStore(_repo);
+
+        Assert.StartsWith("ERROR: could not write the changes", answer);
+        Assert.EndsWith("The csproj and the workflow were left as they were.", answer);
+        Assert.Equal(DcoFixture.Bytes, File.ReadAllBytes(Csproj));
+        Assert.Empty(Directory.GetFiles(Workflows));
+        Assert.Empty(proc.Calls);
     }
 
     [Theory]

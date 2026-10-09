@@ -134,6 +134,30 @@ public class InstallLayoutTests : IDisposable
         Assert.Contains(verdict.Notes, n => n.Contains("Helper.dll, which the package does not carry"));
     }
 
+    /** Files the build lacks are one note per folder, not one per file: eleven pictures were eleven notes saying the same. */
+    [Fact]
+    public void Files_the_build_lacks_are_one_note_per_folder()
+    {
+        string nupkg = Path.Combine(_dir, "many.nupkg"), bin = Path.Combine(_dir, "bin");
+        Directory.CreateDirectory(bin);
+        File.WriteAllText(Path.Combine(bin, "X.dll"), "MZ");
+        File.WriteAllText(Path.Combine(bin, "X.settings.json"), "{}");
+        File.WriteAllText(Path.Combine(bin, "same.txt"), "the build's own");
+        WriteZip(nupkg, new[] { ("build/X.settings.json", "{}"), ("lib/net8.0/X.dll", "MZ"), ("build/notes.txt", "n"),
+                                ("build/same.txt", "another text") }
+            .Concat(Enumerable.Range(1, 6).Select(i => ($"build/Hints/Hints/h{i}.png", "png " + i))).ToArray());
+
+        var verdict = InstallLayout.Verify(nupkg, bin);
+
+        Assert.Empty(verdict.Failures);
+        Assert.Equal(new[]
+        {
+            "build/notes.txt lands at notes.txt; the Release build has no such file.",
+            "build/same.txt lands at same.txt, where the Release build has a different file — does the build change it?",
+            "6 files from build/Hints/Hints/ land under Hints/Hints/ (h1.png, h2.png, h3.png, h4.png and 2 more); the Release build has none of them.",
+        }, verdict.Notes.ToArray());
+    }
+
     /**
      * The icon the nuspec names sits at the root because NuGet wants it there. A copy of the same bytes
      * the build keeps in Assets/ is no reason to call that a misplaced file — it sent the author to move

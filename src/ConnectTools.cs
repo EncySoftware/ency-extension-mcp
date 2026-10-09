@@ -91,6 +91,26 @@ public class ConnectTools
         }
     }
 
+    /**
+     * The arguments of `ency-extension-mcp connect-to-store` after the verb: the folder, and the csproj as
+     * `--csproj <path>`, `--csproj=<path>` or `csproj=<path>` — the last is how this tool's answers name
+     * it, so one read in a terminal works typed as it is; it used to be taken for nothing, silently.
+     */
+    public static (string? Path, string? Csproj) CommandLine(IReadOnlyList<string> args)
+    {
+        string? path = null, csproj = null;
+        for (int i = 0; i < args.Count; i++)
+        {
+            string a = args[i];
+            if (a.Equals("--csproj", StringComparison.OrdinalIgnoreCase)) { if (i + 1 < args.Count) csproj = args[++i]; }
+            else if (a.StartsWith("--csproj=", StringComparison.OrdinalIgnoreCase) || a.StartsWith("csproj=", StringComparison.OrdinalIgnoreCase))
+                csproj = a[(a.IndexOf('=') + 1)..];
+            else if (a.StartsWith("path=", StringComparison.OrdinalIgnoreCase)) path ??= a["path=".Length..];
+            else if (!a.StartsWith("--", StringComparison.Ordinal)) path ??= a;
+        }
+        return (path, csproj);
+    }
+
     /** Where the workflow would run: the GitHub remote, or why there is none. */
     private sealed record Home(GitRemote? GitHub, string? Missing);
 
@@ -110,6 +130,7 @@ public class ConnectTools
         var home = HomeOf(git, start);
 
         string project;
+        string? taken = null;
         if (!string.IsNullOrWhiteSpace(csproj))
         {
             string given = Path.GetFullPath(Path.IsPathRooted(csproj) ? csproj : Path.Combine(start, csproj));
@@ -135,14 +156,38 @@ public class ConnectTools
                      + string.Join(NL, found.Select(f => "  - " + Rel(repo, f.Path) + (f.PacksManifest ? " (packs a *.settings.json)" : "")))
                      + NL + "Call connect_to_store again with csproj=<the one to publish>.";
             project = found.Count == 1 ? found[0].Path : here[0];
+            if (found.Count == 0) taken = Taken(Rel(repo, project), Rel(repo, start), git != null, start);
         }
+        // Every answer names a csproj the search did not find but took as the only one in its folder —
+        // a failure most of all: "the package has no manifest" about the wrong project misleads (review, 09.10.2026).
+        string answer = await ConnectProject(repo, home, project);
+        return taken == null ? answer : WithTaken(answer, taken);
+    }
+
+    /** Why this csproj, when it was not found by what it is but taken as the only one in its folder. */
+    private static string Taken(string relProject, string relFolder, bool inGit, string start) =>
+        $"Took {relProject}: it is the only csproj in "
+        + (relFolder == "." ? (inGit ? "the repository's root" : start) : relFolder + "/")
+        + $", and the search for one that references {ProjectLayout.SdkPackageId} or packs a *.settings.json found none. "
+        + "If it is not the extension, call connect_to_store again with csproj=<its .csproj>.";
+
+    /** The note under an answer's first line, or under the whole of a refusal. */
+    internal static string WithTaken(string answer, string taken)
+    {
+        if (answer.StartsWith("ERROR: ", StringComparison.Ordinal)) return answer.TrimEnd() + NL + taken;
+        int eol = answer.IndexOf('\n');
+        return eol < 0 ? answer + NL + taken : answer[..(eol + 1)] + taken + NL + answer[(eol + 1)..];
+    }
+
+    private async Task<string> ConnectProject(string repo, Home home, string project)
+    {
         string relProject = Rel(repo, project);
         string projectDir = Path.GetDirectoryName(project)!;
 
         // A repository that publishes already needs no second workflow: it would publish every version twice.
         string workflows = Path.Combine(repo, ".github", "workflows");
         if (StoreWorkflow.OtherStoreWorkflow(repo) is { } publishing)
-            return "ERROR: " + PublishesAlready(publishing, Path.Combine(workflows, publishing), projectDir, repo, relProject);
+            return "ERROR: " + PublishesAlready(publishing, Path.Combine(workflows, publishing), project, repo, relProject);
 
         byte[] original = File.ReadAllBytes(project);
         if (!TryDecode(original, out string text, out bool bom, out string? decodeError))
@@ -209,7 +254,8 @@ public class ConnectTools
             {
                 foreach (var d in new[] { Path.Combine(repo, ".github"), workflows })
                     if (!Directory.Exists(d)) { Directory.CreateDirectory(d); created.Add(d); }
-                File.WriteAllText(workflowFile, yaml, new UTF8Encoding(false));
+                // Like the csproj: a write that fails halfway leaves no half a workflow for Revert to miss.
+                WriteAtomically(workflowFile, new UTF8Encoding(false).GetBytes(yaml));
                 workflowWritten = true;
             }
         }
@@ -239,12 +285,14 @@ public class ConnectTools
      * with the project in src/ — publish_extension refuses a project outside src/, and update_extension
      * would plant the template's files beside a workflow of the author's own (review, 09.10.2026).
      */
-    private static string PublishesAlready(string file, string path, string projectDir, string repo, string relProject)
+    private static string PublishesAlready(string file, string path, string project, string repo, string relProject)
     {
+        string projectDir = Path.GetDirectoryName(project)!;
         if (!StoreWorkflow.IsTemplates(path))
             return $"this repository publishes to the store already, through .github/workflows/{file} (it uses "
                  + "publish-extension-action), so there is nothing to connect: a version is published by starting that "
-                 + "workflow. A second one would publish every version twice. Nothing was changed.";
+                 + $"workflow - {StoreWorkflow.HowItStarts(path)}. A second one would publish every version twice."
+                 + PackedWrong(project, projectDir, relProject, file) + " Nothing was changed.";
         if (Path.GetFullPath(projectDir).TrimEnd(Path.DirectorySeparatorChar)
                 .Equals(Path.GetFullPath(Path.Combine(repo, "src")), StringComparison.OrdinalIgnoreCase))
             return $"this repository publishes to the store already, through .github/workflows/{file} - the template's "
@@ -253,6 +301,47 @@ public class ConnectTools
         return $".github/workflows/{file} is the template's workflow, which builds src/, and {relProject} is outside src/. "
              + $"Move the project into src/ and publish with publish_extension; or, to publish it where it is, delete {file} "
              + "and call connect_to_store again for a workflow that packs it there. Nothing was changed.";
+    }
+
+    /**
+     * For a repository that publishes through a workflow of its own: what its csproj packs that the store
+     * tab in ENCY would not install right, read only — "" when nothing. Without it the route ended here:
+     * check_package sends a contentFiles package to this tool, and this tool had nothing to connect
+     * (review, 09.10.2026).
+     */
+    private static string PackedWrong(string project, string projectDir, string relProject, string file)
+    {
+        PackagePathPlan plan;
+        try
+        {
+            if (!TryDecode(File.ReadAllBytes(project), out string text, out _, out _)) return "";
+            plan = PackagePathFix.Plan(text, projectDir);
+        }
+        catch (Exception e) when (e is XmlException or IOException or UnauthorizedAccessException) { return ""; }
+        if (plan.Edits.Count == 0 && plan.Problems.Count == 0) return "";
+        bool contentFiles = plan.Edits.Any(e => e.Change == PathChange.OutOfContentFiles);
+        bool twice = plan.Edits.Any(e => e.Change == PathChange.WrongFolder);
+        var sb = new StringBuilder();
+        sb.Append(NL).Append($"But if {file} publishes what `dotnet pack` makes of {relProject}, that package would not install right")
+          .Append(contentFiles ? ": the store installer in ENCY keeps contentFiles/ as a subfolder away from the dll, so a manifest "
+                                 + "packed there does not find it and the extension never registers" : "")
+          .Append(twice ? (contentFiles ? "; and " : ": ") + "a value that names an item's own folder puts its files one folder too "
+                          + "deep, since NuGet adds that folder by itself" : "")
+          .Append('.');
+        if (plan.Edits.Count > 0)
+        {
+            sb.Append(NL).Append($"Change these in {relProject}:");
+            foreach (var e in plan.Edits)
+            {
+                sb.Append(NL).Append($"  - line {e.Line} ({e.Item}): PackagePath \"{e.Before}\" -> \"{e.After}\"");
+                if (e.Unchecked != null) sb.Append(NL).Append("    ! " + e.Unchecked);
+            }
+        }
+        if (plan.Problems.Count > 0)
+            sb.Append(NL).Append("These need a hand:").Append(string.Concat(plan.Problems.Select(p => NL + "  - " + p)));
+        sb.Append(NL).Append($"Or delete {file} and call connect_to_store again: it makes these changes, proves them with a real pack ")
+          .Append("and adds a workflow of its own.");
+        return sb.ToString();
     }
 
     /** Where a workflow would run for this repository: its GitHub remote, or a sentence saying why there is none. */
@@ -344,14 +433,17 @@ public class ConnectTools
               + $"names {(nuspecNamed == 1 ? "it" : "them")}";
         string manifest = verdict.Module != null ? $"{verdict.Manifest} finds {verdict.Module}"
             : $"the manifest is {verdict.Manifest} (its module_path is not relative to it, so the dll it names was not looked for)";
-        // The cache matters only to a run elsewhere: a publish from this machine packs with the same one.
+        // The cache matters only to a run elsewhere: a publish from this machine packs with the same one. And
+        // only when it may have held something the workflow's sources do not — it had from elsewhere, or
+        // where it had them from could not be read; a cache filled from those two sources is no caveat.
+        bool cacheMatters = gitHub != null && o.Check.Elsewhere is null or { Count: > 0 };
         sb.AppendLine($"Checked: a real `dotnet pack -c Release` (nuget.org and the ENCY Nexus as sources, NU1603 as an error), laid "
                     + $"out the way the store tab in ENCY installs it: {verdict.AtBuildPath} "
                     + (verdict.AtBuildPath == 1 ? "file lands where the Release build has it" : "files land where the Release build has them")
                     + $"{named}; {manifest}; nothing lands under contentFiles/."
-                    + (gitHub != null ? " Its restore may have taken packages from this machine's cache; the run on GitHub starts "
-                                        + "cold, with only those two sources." : ""));
-        foreach (var n in verdict.Notes) sb.AppendLine("  - note: " + n);
+                    + (cacheMatters ? " Its restore may have taken packages from this machine's cache; the run on GitHub starts "
+                                      + "cold, with only those two sources." : ""));
+        foreach (var n in Capped(verdict.Notes, 8)) sb.AppendLine("  - note: " + n.Replace(" — ", " - "));
         if (gitHub != null && o.Check.Elsewhere is { Count: > 0 } elsewhere)
             sb.AppendLine($"  - note: this machine's cache had {InstallLayout.Some(elsewhere)} from other sources - if neither nuget.org "
                         + $"nor the ENCY Nexus has {(elsewhere.Count == 1 ? "it" : "them")}, the run on GitHub stops at restore (NU1101).");
@@ -376,6 +468,9 @@ public class ConnectTools
             stops.Add($"the package is built against SDK {built}, newer than the store takes ({o.Ceiling}) - the released ENCY "
                     + $"does not register an extension built against a newer one, so the store refuses it. Reference "
                     + $"{ProjectLayout.SdkPackageId} {o.Ceiling} in {rel}.");
+        // An answer the store cannot take refuses the publish today, on every route — not from 1 November
+        // with a warning until then (LegalGate.manifestRefusal; review, 09.10.2026).
+        stops.AddRange(RefusedAnswer(facts));
         if (stops.Count > 0)
         {
             sb.AppendLine();
@@ -389,14 +484,21 @@ public class ConnectTools
         sb.AppendLine($"  2. {Store}/publish: the developer registration, then accept the terms (I Agree).");
         int step = 3;
         if (gitHub != null)
+        {
             // The store's order (PublisherAuth): a bound repository's runs are its binder's, whoever starts
             // them; an unbound one's are whoever starts it, when their GitHub is linked. The first publish
-            // binds it — so who starts THAT run decides whose the repository is.
+            // binds it — so who starts THAT run decides whose the repository is. Binding ahead takes proof
+            // that the repository's owner is the caller's (requireRepositoryOfTheCaller), and the account
+            // page shows its Connect form to a linked person only when a link with both fields brings them.
+            string owner = gitHub.GitHub![..gitHub.GitHub!.IndexOf('/')];
             sb.AppendLine($"  {step++}. Profile -> \"Sign in with GitHub\" links your GitHub account. The first publish binds "
                         + $"{gitHub.GitHub} to {name}: start it as the card's owner, with that GitHub account linked - a run from "
                         + $"a repository not bound yet is credited to whoever starts it. After that every run from {gitHub.GitHub} "
-                        + $"is credited to that owner, whoever starts it. To bind it before the first run: Connect on {Store}/account, "
-                        + $"or `ency-extension-mcp claim {name} {gitHub.GitHub}`.");
+                        + "is credited to that owner, whoever starts it. To bind it before the first run instead: "
+                        + $"{Store}/account?connect={Uri.EscapeDataString(name)}&repo={Uri.EscapeDataString(gitHub.GitHub)} "
+                        + $"(press Connect there) or `ency-extension-mcp claim {name} {gitHub.GitHub}` - either works only for whoever "
+                        + $"linked {owner}, the repository's owner, through Sign in with GitHub.");
+        }
         sb.AppendLine($"  {step}. Own the card: {name} has to belong to that store account - a new name becomes theirs with its first "
                     + "publish; a card someone else owns: ask that owner or the store's moderators to hand it over.");
 
@@ -404,18 +506,22 @@ public class ConnectTools
         if (gitHub != null)
         {
             sb.AppendLine("To publish:");
+            // To the remote that is on GitHub — a mirror beside another origin is where the run happens, and a
+            // tag pushed to origin would not reach it (review, 09.10.2026). publish_extension pushes there too.
+            string remote = gitHub.Name;
+            string to = remote == "origin" ? "" : $" to {remote}";
             // Only this call's own changes are "above"; a second call, or a repository connected by hand, has none.
             sb.AppendLine(o.Plan.Edits.Count > 0 || o.WorkflowWritten
-                ? "  - commit and push the changes above;"
-                : $"  - commit and push {rel} and {StoreWorkflow.RelativePath} if they are not on GitHub as they are here;");
-            sb.AppendLine("  - push a version tag: git tag vX.Y.Z, then git push origin vX.Y.Z - the workflow publishes X.Y.Z "
+                ? $"  - commit and push the changes above{to};"
+                : $"  - commit and push {rel} and {StoreWorkflow.RelativePath}{to} if they are not on GitHub as they are here;");
+            sb.AppendLine($"  - push a version tag: git tag vX.Y.Z, then git push {remote} vX.Y.Z - the workflow publishes X.Y.Z "
                         + "(publish_extension does both);");
             sb.AppendLine("  - or on GitHub: Actions -> \"Publish to ENCY Extension Store\" -> Run workflow, type the version; tick "
                         + "\"dry run\" to have the store check the package and publish nothing.");
             sb.AppendLine($"  GitHub offers Run workflow only once {StoreWorkflow.FileName} is on the default branch.");
-            var alongside = TagWorkflows(o.Workflows);
+            var alongside = StoreWorkflow.TagWorkflows(o.Workflows);
             if (alongside.Count > 0)
-                sb.AppendLine($"  A tag push also starts {string.Join(", ", alongside.SkipLast(1))}{(alongside.Count > 1 ? " and " : "")}{alongside[^1]}, "
+                sb.AppendLine($"  A tag push also starts {StoreWorkflow.Listed(alongside)}, "
                             + (alongside.Count == 1 ? "which has a tag trigger of its own" : "which have tag triggers of their own")
                             + "; Run workflow starts this one alone.");
             // The store's moderation gate (PublishService.openCard): only a brand-new card waits for an admin.
@@ -452,35 +558,74 @@ public class ConnectTools
      * package.info.json, read for `reservedDomains`, else the earlier `reservedFunctionality` block. A
      * csproj gets that file there with the item below — packed for real (SDK 10.0.401, 09.10.2026) it
      * lands at build/package.info.json, and the copy in the Release build keeps the check quiet about it.
+     * A package that carries one already gets the key into that file: a second one packed beside it is
+     * dropped by NuGet (NU5118) or hides behind the first (review, 09.10.2026).
      */
     private string ScheduleANote(PackageFacts? facts, bool fromCi)
     {
         // How the store takes an answer from CI or a tool: the first publish with a new one stops with a link.
         string confirm = (fromCi ? "The first run" : "The first publish") + " with a new answer stops once with a link to "
                        + "confirm it in the browser; confirm, then " + (fromCi ? "run the workflow again." : "publish again.");
+        const string whose = "This tool does not write it: the answer is the author's to decide. ";
+        string what = $"[] when the extension provides none of the areas listed at {ScheduleA.Url}, otherwise one "
+                    + "{\"domain\", \"entitlement\"} entry per area";
         var d = facts?.Declaration;
-        if (d != null && d.Malformed == null && !d.Legacy
-            && d.Domains.All(e => !string.IsNullOrWhiteSpace(e.Domain) && !string.IsNullOrWhiteSpace(e.Entitlement)))
+        string? entry = facts?.ManifestEntry;
+        bool refused = d != null && (d.Malformed != null || d.Domains.Any(Incomplete));
+        if (d != null && !refused && !d.Legacy)
             return "Schedule A: the package carries the Reserved Functionality answer ("
                  + (d.Domains.Count == 0 ? "none of the areas" : string.Join(", ", d.Domains.Select(x => x.Domain)))
                  + ")." + NL + "  " + confirm;
+        bool past = today() >= ScheduleA.RefusedFrom;
+        if (refused)
+            return $"Schedule A: the store refuses the answer the package's {entry} carries, as it is written - see \"Before the "
+                 + "first publish\" above."
+                 + (d!.Legacy ? $" It is the earlier `{ScheduleA.LegacyKey}` block as well, which the store "
+                                + (past ? "no longer reads." : $"reads only until {ScheduleA.RefusedFrom.AddDays(-1):yyyy-MM-dd}.") : "")
+                 + NL + $"  The answer is `{ScheduleA.Key}` in that file: {what}." + NL + "  " + whose + confirm;
+        if (d != null)   // the earlier block: the key goes into the same file
+            return (past
+                       ? $"Schedule A: since {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses the earlier `{ScheduleA.LegacyKey}` block, "
+                         + $"which the package's {entry} carries."
+                       : $"Schedule A: the package's {entry} carries the answer in the earlier `{ScheduleA.LegacyKey}` block, which the "
+                         + $"store reads, with a warning, until {ScheduleA.RefusedFrom.AddDays(-1):yyyy-MM-dd}, and refuses from "
+                         + $"{ScheduleA.RefusedFrom:yyyy-MM-dd}.")
+                 + NL + $"  The answer is `{ScheduleA.Key}` in that file instead: {what}." + NL + "  " + whose + confirm;
 
         string route = fromCi ? "a publish from CI" : "a publish from this machine";
-        string when = today() >= ScheduleA.RefusedFrom
+        string when = past
             ? $"Schedule A: since {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses {route} that carries no Reserved Functionality answer."
             : $"Schedule A: from {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses {route} that carries no Reserved Functionality "
               + "answer; until then it publishes with a warning.";
-        string what = $"[] when the extension provides none of the areas listed at {ScheduleA.Url}, otherwise one "
-                    + "{\"domain\", \"entitlement\"} entry per area";
-        // A package that packs a package.info.json already needs the key in it, not a second file.
-        string where = d != null
-            ? $" The package's package.info.json has it in an earlier or broken form." + NL
-              + $"  The answer is `{ScheduleA.Key}` in that file: {what}."
+        string where = entry != null
+            ? NL + $"  The answer is `{ScheduleA.Key}` in the package.info.json the package carries ({entry}): add it to the file packed "
+              + $"there - {what}. Never pack a second package.info.json beside it: the store reads only the first."
             : NL + $"  The answer is `{ScheduleA.Key}` in a package.info.json next to the csproj: {what}; no packageId or version in "
               + "it (the store refuses one that disagrees with the package). Pack it with <None Include=\"package.info.json\" "
               + "Pack=\"true\" PackagePath=\"build\\\" CopyToOutputDirectory=\"PreserveNewest\" />.";
-        return when + where + NL + "  This tool does not write it: the answer is the author's to decide. " + confirm;
+        return when + where + NL + "  " + whose + confirm;
     }
+
+    /**
+     * The Schedule A answers the store refuses today, on every route — CI, a tool and the publish form
+     * alike: a list it cannot read, an entry without its area or its licence (LegalGate.manifestRefusal,
+     * DeclarationRules.problems). Which licence is right is the store's to say; this sees only a missing one.
+     */
+    private static IEnumerable<string> RefusedAnswer(PackageFacts? facts)
+    {
+        if (facts?.Declaration is not { } d) yield break;
+        string entry = facts.ManifestEntry ?? "package.info.json";
+        if (d.Malformed != null)
+            yield return $"the package's {entry} holds a Reserved Functionality answer the store cannot read ({d.Malformed}) - the "
+                       + $"store refuses such a package today, on every route. The areas and their licences: {ScheduleA.Url}.";
+        else if (d.Domains.Any(Incomplete))
+            yield return (d.Legacy ? $"the earlier `{ScheduleA.LegacyKey}` block" : $"an entry of `{ScheduleA.Key}`")
+                       + $" in the package's {entry} lacks \"domain\" or \"entitlement\" - the store refuses that today, on every route; "
+                       + $"each area comes with the licence Schedule A assigns to it ({ScheduleA.Url}).";
+    }
+
+    private static bool Incomplete(ReservedDomainEntry e) =>
+        string.IsNullOrWhiteSpace(e.Domain) || string.IsNullOrWhiteSpace(e.Entitlement);
 
     private async Task<string> WithUpdateNote(string text)
     {
@@ -607,38 +752,44 @@ public class ConnectTools
      * The packages the check restored that this machine's cache got from elsewhere than the workflow's
      * two sources — "Id Version (source)", from each one's .nupkg.metadata in the global packages folder.
      * Restore takes a package from the cache without asking any source, so the check passes on them
-     * while the run on GitHub, which starts cold, may find them nowhere. Empty when nothing can be read.
+     * while the run on GitHub, which starts cold, may find them nowhere. Empty when every package came
+     * from those two; null when where some came from cannot be read — then the answer keeps its caveat.
      */
-    internal static IReadOnlyList<string> CachedFromElsewhere(string? assetsFile)
+    internal static IReadOnlyList<string>? CachedFromElsewhere(string? assetsFile)
     {
         var found = new List<string>();
+        bool unknown = false;
         try
         {
-            if (assetsFile == null || !File.Exists(assetsFile)) return found;
+            if (assetsFile == null || !File.Exists(assetsFile)) return null;
             using var doc = JsonDocument.Parse(File.ReadAllText(assetsFile));
             var root = doc.RootElement;
             if (!root.TryGetProperty("libraries", out var libraries) || libraries.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("packageFolders", out var folders) || folders.ValueKind != JsonValueKind.Object)
-                return found;
+                return null;
             var roots = folders.EnumerateObject().Select(f => f.Name).ToList();
             foreach (var lib in libraries.EnumerateObject())
             {
                 if (!lib.Value.TryGetProperty("type", out var type) || type.GetString() != "package"
                     || !lib.Value.TryGetProperty("path", out var path) || path.GetString() is not { Length: > 0 } rel) continue;
+                bool read = false;
                 foreach (var folder in roots)
                 {
                     string metadata = Path.Combine(folder, rel.Replace('/', Path.DirectorySeparatorChar), ".nupkg.metadata");
                     if (!File.Exists(metadata)) continue;
                     using var meta = JsonDocument.Parse(File.ReadAllText(metadata));
-                    if (meta.RootElement.TryGetProperty("source", out var s) && s.GetString() is { Length: > 0 } source
-                        && !IsWorkflowSource(source))
-                        found.Add($"{lib.Name.Replace('/', ' ')} ({source})");
+                    if (meta.RootElement.TryGetProperty("source", out var s) && s.GetString() is { Length: > 0 } source)
+                    {
+                        read = true;
+                        if (!IsWorkflowSource(source)) found.Add($"{lib.Name.Replace('/', ' ')} ({source})");
+                    }
                     break;
                 }
+                unknown |= !read;
             }
         }
-        catch (Exception) { /* the note is a bonus; the check stands without it */ }
-        return found;
+        catch (Exception) { return found.Count > 0 ? found : null; /* the note is a bonus; the check stands without it */ }
+        return unknown && found.Count == 0 ? null : found;
     }
 
     /** nuget.org (any of its hosts) or the ENCY Nexus the workflow restores from, however the address is written. */
@@ -654,14 +805,14 @@ public class ConnectTools
 
     // ---- finding things
 
-    private sealed record Candidate(string Path, bool PacksManifest);
+    internal sealed record Candidate(string Path, bool PacksManifest);
 
     /**
      * Every csproj under the folder that is an extension: it references the ENCY SDK or packs a
      * *.settings.json. Build output, packages and dot-folders (.git, .vs, a build script's own) are
      * skipped; the walk is bounded, in case it starts somewhere far too wide.
      */
-    private static List<Candidate> FindExtensionProjects(string root)
+    internal static List<Candidate> FindExtensionProjects(string root)
     {
         var found = new List<Candidate>();
         var pending = new Queue<(string Dir, int Depth)>();
@@ -692,11 +843,6 @@ public class ConnectTools
         }
         return found;
     }
-
-    /** The other workflows a version tag push starts as well, read from their `on:` blocks. */
-    private static List<string> TagWorkflows(string workflows) =>
-        StoreWorkflow.Workflows(workflows).Where(f => Read(f) is { } t && StoreWorkflow.StartsOnVersionTag(t))
-            .Select(f => Path.GetFileName(f)).ToList();
 
     /** The line ending the repository's other workflows use, so the new one does not stand out in a diff. */
     private static string NewlineOf(string workflows) =>

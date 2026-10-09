@@ -197,6 +197,8 @@ public static class InstallLayout
         var build = new BuildOutput(buildDir);
         var meta = NuspecFiles(archive);
         var named = new List<string>();
+        // Files the build has no copy of, or another copy of — said once per folder, not once per file.
+        var unmatched = new List<(InstalledFile File, bool Differs)>();
         int atBuild = 0;
         foreach (var p in placed)
         {
@@ -217,11 +219,11 @@ public static class InstallLayout
                              + (elsewhere != null ? $"; the Release build has it at {elsewhere}" : "") + ".");
             else if (elsewhere != null)
                 failures.Add($"{p.Entry} lands at {p.Installed}, but the Release build has it at {elsewhere}." + Doubled(p.Installed, elsewhere));
-            else if (exists)
-                notes.Add($"{p.Entry} lands at {p.Installed}, where the Release build has a different file — does the build change it?");
             else
-                notes.Add($"{p.Entry} lands at {p.Installed}; the Release build has no such file.");
+                unmatched.Add((p, exists));
         }
+        foreach (var g in unmatched.GroupBy(u => (u.Differs ? "1|" : "0|") + Dir(u.File.Installed).ToLowerInvariant()))
+            notes.Add(Unmatched(g.Select(u => u.File).ToList(), g.First().Differs));
 
         // What the build has and the package does not carry: the installer puts nothing else in the folder.
         var installed = new HashSet<string>(placed.Select(p => p.Installed), StringComparer.OrdinalIgnoreCase);
@@ -254,6 +256,35 @@ public static class InstallLayout
                      + "by itself (for <None Update=...>, the file's folder in the project), so the PackagePath has to stop above "
                      + "it - plain build\\ for a file in the project's own folders.";
         return "";
+    }
+
+    /**
+     * The note for files that land where the Release build has none of them (or other bytes): one file
+     * by its paths, several of one folder as one line — eleven pictures in a doubled folder made eleven
+     * notes saying the same (review, 09.10.2026).
+     */
+    private static string Unmatched(IReadOnlyList<InstalledFile> files, bool differs)
+    {
+        if (files.Count == 1)
+        {
+            var f = files[0];
+            return differs ? $"{f.Entry} lands at {f.Installed}, where the Release build has a different file — does the build change it?"
+                           : $"{f.Entry} lands at {f.Installed}; the Release build has no such file.";
+        }
+        string folder = Dir(files[0].Installed);
+        string where = folder.Length == 0 ? "in the extension's folder" : $"under {folder}/";
+        var sources = files.Select(f => Dir(f.Entry)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        string from = sources.Count == 1 && sources[0].Length > 0 ? $" from {sources[0]}/" : "";
+        string names = Some(files.Select(f => FileName(f.Installed)).ToList());
+        return differs ? $"{files.Count} files{from} land {where} ({names}), where the Release build has different files — does the build change them?"
+                       : $"{files.Count} files{from} land {where} ({names}); the Release build has none of them.";
+    }
+
+    /** The folder of a '/'-separated path; "" for a file at the root. */
+    private static string Dir(string path)
+    {
+        int slash = path.LastIndexOf('/');
+        return slash < 0 ? "" : path[..slash];
     }
 
     /** "a.dll, b.dll and 3 more" — a list that stays one line. */
