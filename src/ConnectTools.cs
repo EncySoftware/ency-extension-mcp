@@ -17,8 +17,12 @@ namespace EncyExtensionMcp;
 /// project brought over from nuget.org (08.10.2026) packed its manifest under contentFiles/, which
 /// ENCY's store installer keeps as a folder of its own: the store took the package and ENCY never
 /// registered it. So this tool changes exactly two things — the PackagePath values that put runtime
-/// files there, and a workflow file of its own — and proves both with a real pack before it lets
-/// them stay.</para>
+/// files where the installer does not look, and a workflow file of its own — and proves both with a
+/// real pack before it lets them stay.</para>
+///
+/// <para>The workflow runs on GitHub Actions only, so it is added only to a repository with a GitHub
+/// remote. Anywhere else the csproj fix and the check still happen — every route needs them, and
+/// sending such a project to publish_package without them would only send it back here.</para>
 ///
 /// <para>Nothing is written for the author that only the author can say: no package.info.json, no
 /// Schedule A answer.</para>
@@ -42,15 +46,18 @@ public class ConnectTools
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly IProcessRunner proc;
+    private readonly IStoreClient store;
     private readonly IUpdateCheck updates;
     private readonly Action<string> log;
     private readonly Func<DateOnly> today;
 
-    // Built per call by the MCP SDK from the container (see ServerSetup): everything past the process
-    // runner is optional for that reason. `today` is for the tests — the Schedule A date is a real one.
-    public ConnectTools(IProcessRunner proc, IUpdateCheck? updates = null, Action<string>? log = null, Func<DateOnly>? today = null)
+    // Built per call by the MCP SDK from the container (see ServerSetup): everything past the services
+    // is optional for that reason. `today` is for the tests — the Schedule A date is a real one.
+    public ConnectTools(IProcessRunner proc, IStoreClient store, IUpdateCheck? updates = null, Action<string>? log = null,
+                        Func<DateOnly>? today = null)
     {
         this.proc = proc;
+        this.store = store;
         this.updates = updates ?? new NoUpdateCheck();
         this.log = log ?? (s => Console.Error.WriteLine(s));
         this.today = today ?? (() => DateOnly.FromDateTime(DateTime.UtcNow));
@@ -61,13 +68,14 @@ public class ConnectTools
         "publishes it: the tool for \"publish my existing project to the ENCY store\" when the project was " +
         "NOT made from the store template and is packed with `dotnet pack` (use update_extension only for " +
         "projects made from the template; publish_folder makes a NEW repository). Finds the extension's " +
-        "csproj, moves the files it packs under contentFiles/ (where ENCY's store installer never looks, so " +
-        "the extension would install and not register) to build\\, adds .github/workflows/publish_store.yml " +
-        "(a version tag or Actions -> Run workflow publishes; no secrets), then packs the project for real " +
-        "and lays the package out the way ENCY installs it — when that check fails, both changes are taken " +
-        "back. Writes nothing else: no package.info.json, no Schedule A answer (ask the author for that). " +
-        "Returns the changes, the check, and the one-time steps only the author can do in the browser. " +
-        "Needs the .NET SDK the project targets.")]
+        "csproj and moves the files it packs where ENCY's store installer does not look (contentFiles/, " +
+        "or a folder named twice) to build\\, adds .github/workflows/publish_store.yml when the repository " +
+        "is on GitHub (a version tag or Actions -> Run workflow publishes; no secrets; one repository " +
+        "publishes one extension), then packs the project for real and lays the package out the way ENCY " +
+        "installs it — when that check fails, both changes are taken back. Writes nothing else: no " +
+        "package.info.json, no Schedule A answer (ask the author for that). Returns the changes, the " +
+        "check, and the one-time steps only the author can do in the browser. Afterwards publish_extension " +
+        "pushes the version tag and publish_status follows the run. Needs the .NET SDK the project targets.")]
     public async Task<string> ConnectToStore(
         [Description("The repository root or the project folder. Default: current directory")] string? path = null,
         [Description("The extension's .csproj when the folder holds several projects: absolute, or relative to path")] string? csproj = null)
@@ -81,6 +89,9 @@ public class ConnectTools
         }
     }
 
+    /** Where the workflow would run: the GitHub remote, or why there is none. */
+    private sealed record Home(GitRemote? GitHub, string? Missing);
+
     private async Task<string> Connect(string? path, string? csproj)
     {
         string start = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "." : path);
@@ -91,10 +102,10 @@ public class ConnectTools
         }
         if (!Directory.Exists(start)) return $"ERROR: there is no folder at {start}.";
 
-        string? repo = RepoRoot(start);
-        if (repo == null)
-            return $"ERROR: {start} is not inside a git repository. connect_to_store gives a GitHub repository a workflow "
-                 + "that publishes it - put the project on GitHub first, or publish a build from this machine with publish_package.";
+        // Outside git the folder given stands for the repository: the csproj is still fixed and checked.
+        string? git = GitRepository.Root(start);
+        string repo = git ?? start;
+        var home = HomeOf(git, start);
 
         string project;
         if (!string.IsNullOrWhiteSpace(csproj))
@@ -104,7 +115,7 @@ public class ConnectTools
             if (!File.Exists(given) || !given.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
                 return $"ERROR: there is no .csproj at {given}.";
             if (!IsUnder(given, repo))
-                return $"ERROR: {given} is outside the repository {repo} - the workflow can build only what the repository holds.";
+                return $"ERROR: {given} is outside {(git != null ? "the repository " : "")}{repo} - the workflow can build only what the repository holds.";
             project = given;
         }
         else
@@ -124,7 +135,7 @@ public class ConnectTools
 
         // A repository made from the template publishes already; a second workflow would publish twice.
         string workflows = Path.Combine(repo, ".github", "workflows");
-        if (OtherStoreWorkflow(workflows) is { } publishing)
+        if (StoreWorkflow.OtherStoreWorkflow(repo) is { } publishing)
             return $"ERROR: this repository already publishes to the store through .github/workflows/{publishing}, so it needs "
                  + "no second workflow. A project made from the template publishes with publish_extension, and update_extension "
                  + "brings it in line with the template.";
@@ -139,7 +150,7 @@ public class ConnectTools
         if (dotnet == null)
             return $"ERROR: {relProject} targets {tfm}, and the workflow builds net8.0, net9.0 or net10.0 projects - the ones "
                  + "ENCY 3 extensions target. Target the framework of the ENCY you build for, then call connect_to_store again.";
-        if (!StoreWorkflow.IsSafePath(relProject))
+        if (home.GitHub != null && !StoreWorkflow.IsSafePath(relProject))
             return $"ERROR: the project's path {relProject} holds a character the workflow's shell would read as its own "
                  + "(a quote, $, ` or \\) - rename the folder, then call connect_to_store again.";
 
@@ -155,6 +166,12 @@ public class ConnectTools
         string yaml = StoreWorkflow.Render(relProject, dotnet, NewlineOf(workflows));
         bool workflowExisted = File.Exists(workflowFile);
         bool workflowSame = workflowExisted && SameText(File.ReadAllText(workflowFile), yaml);
+        // One repository publishes one extension: the store binds the repository to the first package it
+        // publishes. A workflow already here that packs something else is that other extension's, and
+        // saying "connected" over it would be a claim its first tag disproves (review, 09.10.2026).
+        if (home.GitHub != null && workflowExisted && !workflowSame
+            && OtherProject(File.ReadAllText(workflowFile), relProject, repo) is { } other)
+            return "ERROR: " + other + " Nothing was changed.";
 
         // ---- write, then prove it; on any failure both go back
         var created = new List<string>();
@@ -187,7 +204,7 @@ public class ConnectTools
                 WriteAtomically(project, Encode(plan.Text, bom));
                 csprojWritten = true;
             }
-            if (!workflowExisted)
+            if (home.GitHub != null && !workflowExisted)
             {
                 foreach (var d in new[] { Path.Combine(repo, ".github"), workflows })
                     if (!Directory.Exists(d)) { Directory.CreateDirectory(d); created.Add(d); }
@@ -209,36 +226,93 @@ public class ConnectTools
         if (check.Failure != null)
             return "ERROR: " + check.Failure + NL + Revert();
 
-        return await WithUpdateNote(Report(relProject, plan, dotnet, workflowWritten, workflowSame, check, workflows));
+        // The SDK line the store publishes under; null when it did not answer — then nothing is said.
+        string? ceiling = await store.GetRecommendedSdk();
+        var outcome = new Outcome(relProject, plan, dotnet, check, workflows, home, workflowExisted, workflowWritten, workflowExisted && workflowSame, ceiling);
+        return await WithUpdateNote(Report(outcome));
+    }
+
+    /** Where a workflow would run for this repository: its GitHub remote, or a sentence saying why there is none. */
+    private static Home HomeOf(string? git, string start)
+    {
+        if (git == null) return new Home(null, $"{start} is not in a git repository");
+        var remotes = GitRepository.Remotes(git);
+        if (GitRepository.GitHubRemote(remotes) is { } gitHub) return new Home(gitHub, null);
+        if (remotes.Count == 0) return new Home(null, "this repository has no remote");
+        return new Home(null, (remotes.Count == 1 ? "its remote" : "its remotes") + " ("
+                              + string.Join(", ", remotes.Select(r => $"{r.Name}: {r.Url}"))
+                              + (remotes.Count == 1 ? ") is" : ") are") + " not on GitHub");
+    }
+
+    /**
+     * Why an existing publish_store.yml is not this project's — another csproj, or none named at all;
+     * null when it packs this one.
+     */
+    private static string? OtherProject(string yaml, string relProject, string repo)
+    {
+        var named = StoreWorkflow.PackedProjects(yaml);
+        if (named.Any(n => StoreWorkflow.SameProject(n, relProject))) return null;
+        if (named.Count == 0)
+            return $"{StoreWorkflow.RelativePath} is already here and names no .csproj, so what it publishes cannot be told. "
+                 + $"Have its pack step name the project (dotnet pack \"{relProject}\" ...), or delete the file to have this tool "
+                 + "write it, then call connect_to_store again.";
+        string first = named[0];
+        bool gone = !File.Exists(Path.Combine(repo, first.Replace('/', Path.DirectorySeparatorChar)));
+        return $"{StoreWorkflow.RelativePath} already publishes {first}, not {relProject}"
+             + (gone ? $" - and there is no {first} in the repository any more (did the project move? then change the path in it, "
+                       + "or delete the file and call connect_to_store again)." : ".")
+             + " One repository publishes one extension: the store binds the repository to the first extension it publishes"
+             + (gone ? "." : $", so {relProject} needs a repository of its own - or change the workflow to pack it, if this "
+                             + "repository is to publish it instead.");
     }
 
     // ---- the answer
 
-    private string Report(string relProject, PackagePathPlan plan, string dotnet, bool workflowWritten, bool workflowSame,
-                          Check check, string workflows)
+    private sealed record Outcome(string RelProject, PackagePathPlan Plan, string Dotnet, Check Check, string Workflows,
+                                  Home Home, bool WorkflowExisted, bool WorkflowWritten, bool WorkflowSame, string? Ceiling);
+
+    private string Report(Outcome o)
     {
-        var facts = check.Facts;
-        var verdict = check.Verdict!;
+        var facts = o.Check.Facts;
+        var verdict = o.Check.Verdict!;
+        string rel = o.RelProject;
+        var gitHub = o.Home.GitHub;
         var sb = new StringBuilder();
-        string name = facts?.PackageId is { Length: > 0 } id ? id : Path.GetFileNameWithoutExtension(relProject);
-        sb.AppendLine($"Connected {relProject} ({name}) to the ENCY Extension Store.");
+        string name = facts?.PackageId is { Length: > 0 } id ? id : Path.GetFileNameWithoutExtension(rel);
+        sb.AppendLine(gitHub != null
+            ? $"Connected {rel} ({name}) to the ENCY Extension Store: the GitHub repository {gitHub.GitHub} publishes it."
+            : $"Checked {rel} ({name}) for the ENCY Extension Store - no workflow added: {o.Home.Missing}, and the workflow "
+              + "that publishes runs on GitHub Actions only.");
+
         sb.AppendLine();
         sb.AppendLine("Changes:");
-        foreach (var e in plan.Edits)
-            sb.AppendLine($"  - {relProject}, line {e.Line} ({e.Item}): PackagePath \"{e.Before}\" -> \"{e.After}\"");
-        if (plan.Edits.Count == 0)
-            sb.AppendLine($"  - {relProject}: nothing to change - it packs no runtime file under contentFiles/");
-        if (workflowWritten)
-            sb.AppendLine($"  - {StoreWorkflow.RelativePath}: added - packs {relProject} with .NET {dotnet} and publishes the .nupkg, "
+        foreach (var e in o.Plan.Edits)
+        {
+            sb.AppendLine($"  - {rel}, line {e.Line} ({e.Item}): PackagePath \"{e.Before}\" -> \"{e.After}\"");
+            if (e.Unchecked != null) sb.AppendLine("    ! " + e.Unchecked);
+        }
+        if (o.Plan.Edits.Count == 0)
+            sb.AppendLine($"  - {rel}: nothing to change - it packs no runtime file where ENCY's store installer does not look");
+        if (gitHub == null)
+            sb.AppendLine(o.WorkflowExisted
+                ? $"  - {StoreWorkflow.RelativePath}: left as it is, though it does not run - {o.Home.Missing}"
+                : $"  - {StoreWorkflow.RelativePath}: not added - {o.Home.Missing}");
+        else if (o.WorkflowWritten)
+            sb.AppendLine($"  - {StoreWorkflow.RelativePath}: added - packs {rel} with .NET {o.Dotnet} and publishes the .nupkg, "
                         + "signed in with the run's own GitHub token (no secrets)");
-        else if (workflowSame)
+        else if (o.WorkflowSame)
             sb.AppendLine($"  - {StoreWorkflow.RelativePath}: already there as this tool writes it");
         else
-            sb.AppendLine($"  - {StoreWorkflow.RelativePath}: already there and different from what this tool would write - left as it is");
-        if (plan.Edits.Count > 0)
+            sb.AppendLine($"  - {StoreWorkflow.RelativePath}: already there and packs {rel}, though not word for word as this "
+                        + "tool would write it - left as it is");
+        if (o.Plan.Edits.Any(e => e.Change == PathChange.OutOfContentFiles))
             sb.AppendLine("  Why: ENCY's store installer keeps contentFiles/ as a folder of its own, so what was packed there landed "
-                        + "away from the dll - a manifest there never finds it, and the extension never registers. Under build/ "
-                        + "every file lands where the Release build has it.");
+                        + "away from the dll - a manifest there never finds it, and the extension never registers."
+                        + (o.Plan.Edits.Any(e => e.Change == PathChange.OutOfContentFiles && e.Unchecked == null)
+                            ? " Under build/ a file the build copies lands where the Release build has it." : ""));
+        if (o.Plan.Edits.Any(e => e.Change == PathChange.WrongFolder))
+            sb.AppendLine("  Why: NuGet adds the folder an item's wildcard matched after its PackagePath by itself (for <None Update=...>, "
+                        + "the file's folder in the project), so a value that names that folder again put the files one folder too deep.");
 
         sb.AppendLine();
         string named = verdict.NamedByNuspec.Count == 0 ? ""
@@ -246,8 +320,9 @@ public class ConnectTools
         string manifest = verdict.Module != null ? $"{verdict.Manifest} finds {verdict.Module}"
             : $"the manifest is {verdict.Manifest} (its module_path is not relative to it, so the dll it names was not looked for)";
         sb.AppendLine($"Checked: `dotnet pack -c Release` (nuget.org and the ENCY Nexus as sources, NU1603 as an error) made "
-                    + $"{check.Nupkg}. Laid out the way ENCY's store installer lays it out, {verdict.AtBuildPath} files land "
-                    + $"where the Release build has them{named}, {manifest}, and nothing lands under contentFiles/.");
+                    + $"{o.Check.Nupkg}. Laid out the way ENCY's store installer lays it out, {verdict.AtBuildPath} "
+                    + (verdict.AtBuildPath == 1 ? "file lands where the Release build has it" : "files land where the Release build has them")
+                    + $"{named}, {manifest}, and nothing lands under contentFiles/.");
         foreach (var n in verdict.Notes) sb.AppendLine("  - note: " + n);
         if (facts?.Version is { } v && !v.Equals(ProbeVersion, StringComparison.OrdinalIgnoreCase))
             sb.AppendLine($"  - note: the package came out as version {v}, not the {ProbeVersion} the pack asked for - the csproj "
@@ -255,10 +330,15 @@ public class ConnectTools
 
         var stops = new List<string>();
         if (facts != null && !facts.HasMarker)
-            stops.Add($"the package tags have no `{PackageCheck.MarkerTag}` - the store refuses such a package. Add it to <PackageTags> in {relProject}.");
+            stops.Add($"the package tags have no `{PackageCheck.MarkerTag}` - the store refuses such a package. Add it to <PackageTags> in {rel}.");
         if (facts?.SdkVersion is { } sdk && sdk.Contains('-'))
             stops.Add($"the package is built against SDK {sdk}, a prerelease - the store refuses that; reference a released "
                     + $"{ProjectLayout.SdkPackageId}.");
+        // The store refuses an SDK above its line: newer assemblies do not register in the released ENCY.
+        else if (facts?.SdkVersion is { } built && SdkPin.IsFromTheFuture(built, o.Ceiling))
+            stops.Add($"the package is built against SDK {built}, newer than the store takes ({o.Ceiling}) - the released ENCY "
+                    + $"does not register an extension built against a newer one, so the store refuses it. Reference "
+                    + $"{ProjectLayout.SdkPackageId} {o.Ceiling} in {rel}.");
         if (stops.Count > 0)
         {
             sb.AppendLine();
@@ -270,32 +350,58 @@ public class ConnectTools
         sb.AppendLine("Once, in the browser - only the author can do these:");
         sb.AppendLine($"  1. Sign in at {Store}.");
         sb.AppendLine($"  2. {Store}/publish: the developer registration, then accept the terms (I Agree).");
-        sb.AppendLine("  3. Profile -> \"Sign in with GitHub\": links the GitHub account the runs come from. A run is credited to "
-                    + "whoever starts it, so everyone who will run the workflow links their own.");
-        sb.AppendLine($"  4. Own the card: {name} has to belong to that store account - a new name becomes theirs with its first "
+        int step = 3;
+        if (gitHub != null)
+            // The store's order (PublisherAuth): a bound repository's runs are its binder's, whoever starts
+            // them; an unbound one's are whoever starts it, when their GitHub is linked. The first publish
+            // binds it — so who starts THAT run decides whose the repository is.
+            sb.AppendLine($"  {step++}. Profile -> \"Sign in with GitHub\" links your GitHub account. The first publish binds "
+                        + $"{gitHub.GitHub} to {name}: start it as the card's owner, with that GitHub account linked - a run from "
+                        + $"a repository not bound yet is credited to whoever starts it. After that every run from {gitHub.GitHub} "
+                        + $"is credited to that owner, whoever starts it. To bind it before the first run: Connect on {Store}/account, "
+                        + $"or `ency-extension-mcp claim {name} {gitHub.GitHub}`.");
+        sb.AppendLine($"  {step}. Own the card: {name} has to belong to that store account - a new name becomes theirs with its first "
                     + "publish; a card someone else owns has to be handed over first.");
 
         sb.AppendLine();
-        sb.AppendLine("To publish:");
-        sb.AppendLine("  - commit and push the changes above;");
-        sb.AppendLine("  - push a version tag: git tag vX.Y.Z, then git push origin vX.Y.Z - the workflow publishes X.Y.Z;");
-        sb.AppendLine("  - or on GitHub: Actions -> \"Publish to ENCY Extension Store\" -> Run workflow, type the version; tick "
-                    + "\"dry run\" to have the store check the package and publish nothing.");
-        var alongside = TagWorkflows(workflows);
-        if (alongside.Count > 0)
-            sb.AppendLine($"  A tag push also starts {string.Join(", ", alongside)} (they have tag triggers of their own); "
-                        + "Run workflow starts this one alone.");
+        if (gitHub != null)
+        {
+            sb.AppendLine("To publish:");
+            sb.AppendLine("  - commit and push the changes above;");
+            sb.AppendLine("  - push a version tag: git tag vX.Y.Z, then git push origin vX.Y.Z - the workflow publishes X.Y.Z "
+                        + "(publish_extension does both);");
+            sb.AppendLine("  - or on GitHub: Actions -> \"Publish to ENCY Extension Store\" -> Run workflow, type the version; tick "
+                        + "\"dry run\" to have the store check the package and publish nothing.");
+            var alongside = TagWorkflows(o.Workflows);
+            if (alongside.Count > 0)
+                sb.AppendLine($"  A tag push also starts {string.Join(", ", alongside)} (they have tag triggers of their own); "
+                            + "Run workflow starts this one alone.");
+            sb.AppendLine($"  To follow a run: publish_status (the run of {StoreWorkflow.FileName}, then the store card), or "
+                        + $"my_extensions; on GitHub, the Actions tab of {gitHub.GitHub}.");
+        }
+        else
+        {
+            sb.AppendLine("To publish from this machine:");
+            sb.AppendLine($"  - pack it the way the check did: dotnet pack \"{rel}\" -c Release -p:Version=X.Y.Z "
+                        + $"-p:WarningsAsErrors=NU1603 --source {StoreWorkflow.NuGetOrg} --source {StoreWorkflow.EncyNexus} -o out");
+            sb.AppendLine("  - then publish_package out (or `ency-extension-mcp publish-package out`) - it signs in through the browser;");
+            sb.AppendLine("  - once the repository has a GitHub remote (a mirror will do), call connect_to_store again: it adds the "
+                        + "workflow, and a version tag publishes from then on.");
+        }
 
         sb.AppendLine();
-        sb.Append(ScheduleANote(facts));
+        sb.Append(ScheduleANote(facts, fromCi: gitHub != null));
         return sb.ToString();
     }
 
     /** What the store asks of every submission from 1 November 2026 — said, never answered here. */
-    private string ScheduleANote(PackageFacts? facts)
+    private string ScheduleANote(PackageFacts? facts, bool fromCi)
     {
-        // How the store takes an answer from CI: the first run with a new one stops with a link.
-        const string confirm = "A run with a new answer stops once with a link to confirm it in the store; confirm, then run the workflow again.";
+        // How the store takes an answer from CI or a tool: the first publish with a new one stops with a link.
+        string confirm = fromCi
+            ? "A run with a new answer stops once with a link to confirm it in the store; confirm, then run the workflow again."
+            : "A publish with a new answer stops once with a link to confirm it in the store; confirm, then publish again.";
+        string route = fromCi ? "a publish from CI" : "a publish from this machine";
         var d = facts?.Declaration;
         if (d != null && d.Malformed == null && !d.Legacy
             && d.Domains.All(e => !string.IsNullOrWhiteSpace(e.Domain) && !string.IsNullOrWhiteSpace(e.Entitlement)))
@@ -305,8 +411,8 @@ public class ConnectTools
 
         bool refused = today() >= ScheduleA.RefusedFrom;
         string when = refused
-            ? $"Schedule A: since {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses a publish from CI without the Reserved Functionality answer"
-            : $"Schedule A: from {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses a publish from CI without the Reserved Functionality answer (until then it publishes and warns)";
+            ? $"Schedule A: since {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses {route} without the Reserved Functionality answer"
+            : $"Schedule A: from {ScheduleA.RefusedFrom:yyyy-MM-dd} the store refuses {route} without the Reserved Functionality answer (until then it publishes and warns)";
         string state = d == null ? "" : " The package's package.info.json has the answer in an earlier or broken form.";
         return when + $" - `{ScheduleA.Key}` in a package.info.json packed into the package (PackagePath=\"build\\\"; give it no "
              + "packageId or version, which the tag sets): [] when the extension provides none of the areas listed at "
@@ -418,14 +524,6 @@ public class ConnectTools
 
     // ---- finding things
 
-    /** The folder holding .git (a directory, or a file in a worktree), from here up; null outside any repository. */
-    internal static string? RepoRoot(string dir)
-    {
-        for (string? d = Path.GetFullPath(dir); d != null; d = Path.GetDirectoryName(d))
-            if (Directory.Exists(Path.Combine(d, ".git")) || File.Exists(Path.Combine(d, ".git"))) return d;
-        return null;
-    }
-
     private sealed record Candidate(string Path, bool PacksManifest);
 
     /**
@@ -465,26 +563,14 @@ public class ConnectTools
         return found;
     }
 
-    /** A workflow other than ours that publishes to the store already — the template's, for one. */
-    private static string? OtherStoreWorkflow(string workflows) =>
-        Workflows(workflows).FirstOrDefault(f => Read(f)?.Contains("publish-extension-action", StringComparison.OrdinalIgnoreCase) == true)
-            is { } file ? Path.GetFileName(file) : null;
-
     /** The other workflows a tag push starts as well (they have a tag trigger of their own). */
     private static List<string> TagWorkflows(string workflows) =>
-        Workflows(workflows).Where(f => Read(f) is { } t && Regex.IsMatch(t, @"(?m)^\s*tags\s*:"))
+        StoreWorkflow.Workflows(workflows).Where(f => Read(f) is { } t && Regex.IsMatch(t, @"(?m)^\s*tags\s*:"))
             .Select(f => Path.GetFileName(f)).ToList();
-
-    private static IEnumerable<string> Workflows(string dir) =>
-        !Directory.Exists(dir) ? Enumerable.Empty<string>()
-        : Directory.EnumerateFiles(dir)
-            .Where(f => f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
-            .Where(f => !Path.GetFileName(f).Equals(StoreWorkflow.FileName, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
 
     /** The line ending the repository's other workflows use, so the new one does not stand out in a diff. */
     private static string NewlineOf(string workflows) =>
-        Workflows(workflows).Any(f => Read(f)?.Contains("\r\n") == true) ? "\r\n" : "\n";
+        StoreWorkflow.Workflows(workflows).Any(f => Read(f)?.Contains("\r\n") == true) ? "\r\n" : "\n";
 
     /**
      * The one framework the project builds: its csproj first, then the Directory.Build.props MSBuild
@@ -517,7 +603,7 @@ public class ConnectTools
 
     private static string Rel(string repo, string path) => Path.GetRelativePath(repo, path).Replace('\\', '/');
 
-    private static bool IsUnder(string path, string dir)
+    internal static bool IsUnder(string path, string dir)
     {
         string d = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         string p = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

@@ -162,14 +162,15 @@ public class FolderPublishTools
     // it. This tool is the way back, and it touches exactly what belongs to the template - the SDK
     // pin, the workflow and the rules. The author's own code is neither read nor changed.
     [McpServerTool(Name = "update_extension"), Description(
-        "Bring an existing extension in line with the current template: fix the SDK pin when it " +
-        "points at a version no released application carries, refresh what the template owns - " +
-        "the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed, " +
-        "Directory.Build.props/targets - and, for a project not made from the template, write " +
-        "package.info.json from its csproj with the store's marker tag. The author's own code is " +
-        "neither read nor changed. For a project that was NOT made from the template, has a GitHub " +
-        "repository of its own and is packed with `dotnet pack`, use connect_to_store instead: this " +
-        "tool plants the template's workflow and build files, which expect the template's layout.")]
+        "NOT for a project packed with `dotnet pack` in a GitHub repository of its own, nor for a " +
+        "repository connected with connect_to_store (it has .github/workflows/publish_store.yml) - use " +
+        "connect_to_store for those: this tool plants the template's workflow and build files, which " +
+        "expect the template's src/ layout, and refuses such a repository. For an extension made from the " +
+        "template, or in its src/ layout: bring it in line with the current template - fix the SDK pin " +
+        "when it points at a version no released application carries, refresh what the template owns " +
+        "(the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed, " +
+        "Directory.Build.props/targets), and write package.info.json from the csproj with the store's " +
+        "marker tag when there is none. The author's own code is neither read nor changed.")]
     public async Task<string> UpdateExtension(
         [Description("The extension folder. Default: current directory")] string? folder = null)
     {
@@ -180,12 +181,20 @@ public class FolderPublishTools
         // template has none yet, and this tool is where it gets one.
         var changed = new List<string>();
         var project = ProjectLayout.Locate(root, out var layoutError);
-        if (project != null) ProjectLayout.Adopt(project, changed);
-        string? infoPath = project?.Manifest ?? Directory.EnumerateFiles(root, "package.info.json", SearchOption.AllDirectories)
+        string? foundInfo = project != null ? null : Directory.EnumerateFiles(root, "package.info.json", SearchOption.AllDirectories)
             .FirstOrDefault(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
                               && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
+        string? csprojPath = project?.Csproj
+            ?? (foundInfo != null ? Directory.EnumerateFiles(Path.GetDirectoryName(foundInfo)!, "*.csproj").FirstOrDefault() : null);
+        // Before anything is written: on a repository of its own shape the template's files do harm.
+        if (NotTheTemplatesRoute(root, csprojPath,
+                "update_extension would plant the template's workflow beside it (a second one that publishes on every v* tag, "
+                + "building src/) and its Directory.Build.props/targets (a flat output for every project in the repository, "
+                + "and a PackReady step that deletes *.xml from it - an operation can keep its definition in one).") is { } refusal)
+            return refusal;
+        if (project != null) ProjectLayout.Adopt(project, changed);
+        string? infoPath = project?.Manifest ?? foundInfo;
         if (infoPath == null) return "ERROR: " + (layoutError ?? $"no extension project under {root} — neither a csproj nor a package.info.json.");
-        string? csprojPath = project?.Csproj ?? Directory.EnumerateFiles(Path.GetDirectoryName(infoPath)!, "*.csproj").FirstOrDefault();
         changed.AddRange(await FixSdkPin(infoPath, csprojPath));
 
         // These files belong to the template whole, so they are taken as they are - the checks an
@@ -216,6 +225,30 @@ public class FolderPublishTools
         return "Updated:" + Environment.NewLine + string.Join(Environment.NewLine, changed.Select(c => "  - " + c))
              + Environment.NewLine + Environment.NewLine
              + "Commit, push, and publish a new version (Actions -> Run workflow, or a v* tag).";
+    }
+
+    /**
+     * Why the template's route must not touch this folder; null when it may. A repository connected with
+     * connect_to_store publishes through its own workflow, and a project outside src/ in a repository
+     * with no template workflow is one of its own shape: the template's files would undo both. Seen on a
+     * connected repository (review, 09.10.2026): update_extension added a second v*-triggered workflow
+     * and Directory.Build.props/targets for every project in it, then said "publish a new version".
+     */
+    internal static string? NotTheTemplatesRoute(string folder, string? csproj, string consequence)
+    {
+        if (StoreWorkflow.Find(folder) is { } connected)
+            return $"ERROR: {StoreWorkflow.RepositoryOf(connected)} publishes through {StoreWorkflow.RelativePath}, which "
+                 + $"connect_to_store added: it packs the project where it is and as it is. {consequence} Nothing was changed. "
+                 + "A version is published with publish_extension (it pushes a v* tag) or Actions -> Run workflow; after "
+                 + "changing what the project packs, call connect_to_store again.";
+        string? repo = GitRepository.Root(folder);
+        if (repo != null && csproj != null && !ConnectTools.IsUnder(csproj, Path.Combine(repo, "src"))
+            && StoreWorkflow.OtherStoreWorkflow(repo) == null)
+            return $"ERROR: {Path.GetRelativePath(repo, csproj).Replace('\\', '/')} is not in the template's src/ layout, and "
+                 + $"the repository has no workflow of the template's. {consequence} Nothing was changed. A project packed with "
+                 + "`dotnet pack` in a repository of its own publishes from there: connect_to_store fixes what it packs and "
+                 + "adds a workflow of its own.";
+        return null;
     }
 
     // What the template owns and the author does not: the workflow that publishes, the rules the
@@ -342,19 +375,20 @@ public class FolderPublishTools
     }
 
     [McpServerTool(Name = "publish_folder"), Description(
-        "Publish an ENCY extension from a local folder with NO git and NO gh on this machine — the " +
-        "preferred way to publish. The project need not come from the template: a missing " +
-        "package.info.json is written from the csproj and the store's marker tag added. " +
-        "The store creates the repository in the author's GitHub account " +
-        "(through the store's GitHub App), commits the folder into src/, runs the GitHub build and " +
-        "publishes. The author is needed twice, in the browser only: the ENCY store sign-in and, once, " +
-        "the app's consent page — this tool opens both and waits; nothing is asked in a terminal. " +
-        "Never run `gh auth login` for the author instead of this. The folder is the project: the one " +
-        "holding <Name>.csproj, package.info.json and <Name>.settings.json, or the whole project with " +
-        "src/ inside. Waits for the build by default and returns the result: the version and the card " +
-        "link, or the failing step and its log. The next version is the same call. A project that " +
-        "already has a GitHub repository of its own and is packed with `dotnet pack` should publish " +
-        "from there: connect_to_store gives that repository a workflow, and no second repository is made.")]
+        "Publish an ENCY extension from a local folder that has NO GitHub repository of its own, with no " +
+        "git and no gh on this machine. A project that already has its own GitHub repository and is " +
+        "packed with `dotnet pack` publishes from there instead: connect_to_store gives that repository a " +
+        "workflow and no second repository is made (this tool refuses such a repository, and one " +
+        "connected with connect_to_store). The store creates the repository in the author's GitHub " +
+        "account (through the store's GitHub App), commits the folder into src/, runs the template's " +
+        "GitHub build and publishes; the project need not come from the template - a missing " +
+        "package.info.json is written from the csproj and the store's marker tag added. The author is " +
+        "needed twice, in the browser only: the ENCY store sign-in and, once, the app's consent page — " +
+        "this tool opens both and waits; nothing is asked in a terminal. Never run `gh auth login` for " +
+        "the author instead of this. The folder is the project: the one holding <Name>.csproj, " +
+        "package.info.json and <Name>.settings.json, or the whole project with src/ inside. Waits for the " +
+        "build by default and returns the result: the version and the card link, or the failing step and " +
+        "its log. The next version is the same call.")]
     public async Task<string> PublishFolder(
         [Description("Extension name in PascalCase, e.g. MyToolpathHelper — the store name and the repository name")] string name,
         [Description("The extension folder. Default: current directory")] string? folder = null,
@@ -365,6 +399,13 @@ public class FolderPublishTools
         FolderPlan plan;
         try { plan = FolderPlanner.Plan(Path.GetFullPath(folder ?? ".")); }
         catch (FolderPlanException e) { return "ERROR: " + e.Message; }
+        // A folder that is a GitHub repository of its own publishes from there; a second repository made
+        // from the template would build it the template's way. Checked before anything is written.
+        if (GitRepository.Root(plan.Root) is { } gitRoot && GitRepository.GitHubRemote(GitRepository.Remotes(gitRoot)) is { } gitHub
+            && NotTheTemplatesRoute(plan.Root, Path.Combine(plan.Root, plan.Project),
+                   $"publish_folder would make a second repository for it from the template, besides {gitHub.GitHub}, and build it "
+                   + "the template's way (src/, and a PackReady step that deletes *.xml from the output).") is { } refusal)
+            return refusal;
         // A project that was not made from the template: the manifest is written from its csproj
         // and the marker tag added, before the folder is read for upload — so what goes to the
         // repository is already what the workflow can build and the store can pack.

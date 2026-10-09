@@ -96,7 +96,8 @@ public static class DcoFixture
         : "build/" + path;
 
     /** A package of the project as `dotnet pack` makes it — "build" (fixed) or "contentFiles" (as it was). */
-    public static void WritePackage(string file, string layout, string version = "0.0.0-storecheck", string tags = "ency-extension operationsolver")
+    public static void WritePackage(string file, string layout, string version = "0.0.0-storecheck", string tags = "ency-extension operationsolver",
+                                    string sdk = "3.0.15")
     {
         using var zip = new ZipArchive(File.Create(file), ZipArchiveMode.Create);
         Add(zip, "EncySoftware.DirectCladdingOperation.nuspec", $"""
@@ -110,7 +111,7 @@ public static class DcoFixture
                 <tags>{tags}</tags>
                 <dependencies>
                   <group targetFramework="net10.0-windows7.0">
-                    <dependency id="EncySoftware.CAMAPI.SDK.Net" version="3.0.15" exclude="Build,Analyzers" />
+                    <dependency id="EncySoftware.CAMAPI.SDK.Net" version="{sdk}" exclude="Build,Analyzers" />
                   </group>
                 </dependencies>
               </metadata>

@@ -159,9 +159,11 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
 
     [McpServerTool(Name = "publish_extension"), Description(
         "Publish the extension to the ENCY store: tags the repo vX.Y.Z and pushes — GitHub Actions " +
-        "builds, packs and publishes. The project under src/ need not come from the template: a missing " +
-        "package.info.json is written from the csproj and the store's marker tag added, committed " +
-        "before the tag. New extensions land hidden until a store moderator approves. " +
+        "builds, packs and publishes. In a repository connected with connect_to_store (it has " +
+        ".github/workflows/publish_store.yml) the tag starts that workflow, which packs the csproj where it " +
+        "is, and nothing in the project is touched. Otherwise the project is under src/ and need not come " +
+        "from the template: a missing package.info.json is written from the csproj and the store's marker " +
+        "tag added, committed before the tag. New extensions land hidden until a store moderator approves. " +
         "Requires a clean working tree unless commitAll is true. For a repository whose project is " +
         "not under src/ and is packed with `dotnet pack` (not made from the template), call " +
         "connect_to_store first: it adds a workflow of its own that a version tag starts.")]
@@ -175,6 +177,17 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
                      + "Leave empty to keep what the repo already says")] string? category = null)
     {
         var dir = Path.GetFullPath(repoDir ?? ".");
+        // A repository connected with connect_to_store publishes through its own workflow, which packs the
+        // csproj where it is and as it is: nothing here writes into the project then, and the run to
+        // follow is that workflow's. Before, this tool knew only src/ and publish.yml, refused a connected
+        // project at the root and lost the run of any other (review, 09.10.2026).
+        string? connected = StoreWorkflow.Find(dir);
+        if (connected != null && !string.IsNullOrWhiteSpace(category))
+            return $"ERROR: this repository publishes through {StoreWorkflow.RelativePath}, which packs the csproj as it is, so "
+                 + $"the category is not a field this tool writes: add the tag category:{category.Trim().ToLowerInvariant()} to "
+                 + "<PackageTags> in the csproj (the store takes it as a hint for a card without a category), or set it on the "
+                 + "card page; then publish without category=. Known: "
+                 + string.Join(", ", (await store.GetCategories()).Select(k => k.Id)) + ". Nothing was changed.";
         string? chosenNote = null;
         if (string.IsNullOrWhiteSpace(version))
         {
@@ -205,12 +218,16 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         // author's own project when missing, and the marker tag added, so a project brought from
         // elsewhere publishes as it is. After the clean-tree check, and committed, for the same
         // reason the category is: a refused publish must not leave an edit behind.
-        var project = ProjectLayout.Locate(dir, out var layoutError);
-        if (layoutError != null) return "ERROR: " + layoutError;
-        if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
-            return $"ERROR: the project is at {project.Dir}, but the publish workflow builds src/ — move it under src/, "
-                 + "or let connect_to_store give this repository a workflow that packs the project where it is "
-                 + "(or publish this build with publish_package, which takes any folder).";
+        Project? project = null;
+        if (connected == null)
+        {
+            project = ProjectLayout.Locate(dir, out var layoutError);
+            if (layoutError != null) return "ERROR: " + layoutError;
+            if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
+                return $"ERROR: the project is at {project.Dir}, but the publish workflow builds src/ — move it under src/, "
+                     + "or let connect_to_store give this repository a workflow that packs the project where it is "
+                     + "(or publish this build with publish_package, which takes any folder).";
+        }
         var adopted = new List<string>();
         if (project != null) ProjectLayout.Adopt(project, adopted);
         string? adoptNote = null;
@@ -251,7 +268,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         // "other" until somebody sorts it — and the next publish with a category fills the gap, because
         // the store's hint only ever fills an EMPTY category. But it used to happen in silence, and
         // half the catalogue ended up unsorted that way (11 of 23 on 16.09.2026).
-        else if (UnsortedNote(PackageInfo.ReadCategory(dir)) is { } unsorted)
+        else if (connected == null && UnsortedNote(PackageInfo.ReadCategory(dir)) is { } unsorted)
             categoryNote = unsorted + " Known: " + string.Join(", ", (await store.GetCategories()).Select(k => k.Id));
 
         var existing = await proc.Run("git", $"rev-parse -q --verify refs/tags/{tag}", dir);
@@ -266,7 +283,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         if (!pushTag.Ok) return $"ERROR: tag push failed:\n{pushTag.StdErr.Trim()}";
 
         await Task.Delay(4000); // give Actions a moment to register the run
-        var run = await LatestRun(dir);
+        var run = await LatestRun(dir, connected != null ? StoreWorkflow.FileName : WorkflowFile);
 
         return await WithUpdateNote($"""
             Pushed {tag} — GitHub Actions is building and publishing.{(adoptNote != null ? " " + adoptNote + "." : "")}{(categoryNote != null ? " " + categoryNote + "." : "")}
@@ -295,14 +312,19 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
 
     [McpServerTool(Name = "publish_status"), Description(
         "Status of the latest publish: the GitHub Actions run (with the failure log when red) and, " +
-        "once published, the store card link and its moderation state.")]
+        "once published, the store card link and its moderation state. Follows publish.yml in a " +
+        "repository made from the template, and publish_store.yml in one connected with connect_to_store.")]
     public async Task<string> PublishStatus(
         [Description("Extension repo directory. Default: current directory")] string? repoDir = null)
     {
         var dir = Path.GetFullPath(repoDir ?? ".");
-        var run = await LatestRun(dir);
+        string? connected = StoreWorkflow.Find(dir);
+        var run = await LatestRun(dir, connected != null ? StoreWorkflow.FileName : WorkflowFile);
         if (run == null)
-            return "No publish workflow runs found — did you call publish_extension (push a v* tag)?";
+            return connected != null
+                ? $"No run of {StoreWorkflow.FileName} found yet — push a v* tag (publish_extension does it), or start it on "
+                  + "GitHub: Actions -> \"Publish to ENCY Extension Store\" -> Run workflow."
+                : "No publish workflow runs found — did you call publish_extension (push a v* tag)?";
 
         var sb = new StringBuilder();
         var r = run.Value;
@@ -325,10 +347,13 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
             return sb.ToString();
         }
 
-        var packageId = PackageInfo.ReadPackageId(dir);
+        // A connected repository has no package.info.json: its package id is the csproj's that the workflow packs.
+        var packageId = connected != null ? StoreWorkflow.PackageIdOf(connected) : PackageInfo.ReadPackageId(dir);
         if (packageId == null)
         {
-            sb.AppendLine("Run succeeded. (src/package.info.json not found, so the card was not checked.)");
+            sb.AppendLine(connected != null
+                ? $"Run succeeded. (The csproj {StoreWorkflow.FileName} packs could not be read, so the card was not checked.)"
+                : "Run succeeded. (src/package.info.json not found, so the card was not checked.)");
             return sb.ToString();
         }
         var card = await store.GetCard(packageId);
@@ -396,10 +421,10 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
 
     private record struct RunInfo(long Id, string Status, string? Conclusion, string Url);
 
-    private async Task<RunInfo?> LatestRun(string repoDir)
+    private async Task<RunInfo?> LatestRun(string repoDir, string workflow)
     {
         var res = await proc.Run("gh",
-            $"run list --workflow {WorkflowFile} --limit 1 --json databaseId,status,conclusion,url", repoDir);
+            $"run list --workflow {workflow} --limit 1 --json databaseId,status,conclusion,url", repoDir);
         if (!res.Ok) return null;
         try
         {

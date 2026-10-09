@@ -9,7 +9,7 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 | `publish_folder` | Publishes a local folder with no git and no gh: the store makes the repository, commits the folder, builds and publishes; the author only signs in and approves the store app in the browser. |
 | `publish_folder_status` | The latest publish_folder result: building, published (version + card), or failed (step + log). |
 | `publish_package` | Publishes what you built on THIS machine — a ready `.nupkg` or a build-output folder the store packs. No git, no GitHub, no repository; the card is yours. |
-| `connect_to_store` | For a project NOT made from the template, in a GitHub repository of its own and packed with `dotnet pack`: moves what the csproj packs under `contentFiles/` to `build\`, adds `.github/workflows/publish_store.yml`, and proves both with a real pack laid out the way ENCY installs it. A version tag then publishes. |
+| `connect_to_store` | For a project NOT made from the template, in a GitHub repository of its own and packed with `dotnet pack`: moves what the csproj packs where ENCY's store installer does not look (`contentFiles/`, or a folder named twice) to `build\`, adds `.github/workflows/publish_store.yml`, and proves both with a real pack laid out the way ENCY installs it. A version tag then publishes — `publish_extension` pushes it, `publish_status` follows the run. |
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
 | `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
@@ -40,9 +40,13 @@ the assistant and the MCP registration inside. Nothing on GitHub is touched unti
 
 ## Publish from a folder — no git, no gh
 
-`publish_folder(name, folder)` is the tool an assistant should reach for, and
-`ency-extension-mcp update-extension [folder]` brings an existing extension in line with the current
-template — the SDK pin and the files the template owns — from a terminal.
+`publish_folder(name, folder)` is the tool an assistant should reach for when the folder has no GitHub
+repository of its own (one that has, and is packed with `dotnet pack`, is connected with
+`connect_to_store` instead — see below), and `ency-extension-mcp update-extension [folder]` brings an
+extension made from the template in line with the current template — the SDK pin and the files the
+template owns — from a terminal. Both refuse a repository connected with `connect_to_store`, and a
+project outside `src/` in a repository with no template workflow (`publish_folder`: a GitHub
+repository): the template's files would undo what such a repository publishes with.
 
 `ency-extension-mcp publish-folder <Name> <folder>` is the same route from a terminal. The store
 does the GitHub work through its GitHub App: creates the repository in the author's account,
@@ -161,24 +165,36 @@ ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyE
   as it is, so a manifest packed under `contentFiles/any/any/` looks for its dll in that folder and the
   extension installs without ever registering. The new value is `build\` plus the file's folder in
   the Release build, minus the folder NuGet appends by itself (`<None Update="Images\*.png">` gets
-  plain `build\`, or the pictures land in `Images\Images\`). Only the value between the quotes
-  changes: the byte order mark, the line endings and every other line stay as they were. An item a
-  text edit cannot put right is listed instead, with what it needs.
-- It adds `.github/workflows/publish_store.yml`, never overwriting one and never touching the other
-  workflows: a `vX.Y.Z` tag, or **Actions → Run workflow** with a version (and **dry run** to have
-  the store only check the package), packs the project on GitHub — Release, nuget.org and the ENCY
-  Nexus as sources (some SDK versions are only there), NU1603 as an error — and publishes the `.nupkg`
-  with the run's own GitHub token. No secrets.
+  plain `build\`, or the pictures land in `Images\Images\`); a `build\` or `content\` value that names
+  that folder again is corrected the same way. An item the build does not copy to its output has no
+  place in the build to go by, so it keeps the folder its own value gave it under `contentFiles/`, and
+  the answer marks it with `!` for the author to check. Only the value between the quotes changes: the
+  byte order mark, the line endings and every other line stay as they were. An item a text edit cannot
+  put right is listed instead, with what it needs.
+- It adds `.github/workflows/publish_store.yml` when the repository has a GitHub remote (a mirror will
+  do), never overwriting one and never touching the other workflows: a `vX.Y.Z` tag, or **Actions →
+  Run workflow** with a version (and **dry run** to have the store only check the package), packs the
+  project on GitHub — Release, nuget.org and the ENCY Nexus as sources (some SDK versions are only
+  there), NU1603 as an error — and publishes the `.nupkg` with the run's own GitHub token. No secrets.
+  One repository publishes one extension: a `publish_store.yml` already there that packs another
+  csproj, or names none, stops the call with nothing changed. With no GitHub remote, or outside git, no
+  workflow is added (it would never run), but the csproj is fixed and checked all the same, and the
+  answer gives the `dotnet pack` line and `publish_package` to publish from this machine.
 - It proves both with a real `dotnet pack` on this machine (so it needs the .NET SDK the project
   targets), laid out the way ENCY installs it and compared with the Release build: the manifest has
   to find its dll, every file has to land where the build has it, nothing under `contentFiles/`, no
   two files on one path. When that fails, both changes are taken back and the answer says what would
-  land where.
+  land where. What the store would still refuse at the first publish is named in the answer: no
+  `ency-extension` tag, a prerelease SDK, or an SDK newer than the line the store publishes under.
 
 It writes no `package.info.json` and no Schedule A answer. The answer ends with what only the author
 can do, once, in the browser — sign in at [apps.encycam.com](https://apps.encycam.com), the developer
-registration and the terms on the Publish page, **Sign in with GitHub** in the profile (a run is
-credited to whoever starts it), owning the card — and with how to publish.
+registration and the terms on the Publish page, **Sign in with GitHub** in the profile, owning the
+card — and with how to publish. The first publish binds the repository to the extension, so start it
+as the card's owner with that GitHub account linked; from then on every run from the repository is
+credited to that owner, whoever starts it (to bind it in advance: **Connect** on the account page, or
+`ency-extension-mcp claim <PackageId> <owner/repo>`). After that `publish_extension` pushes the
+version tag, and `publish_status` follows the run of `publish_store.yml` to the store card.
 
 A project made from the template, or brought into its `src/` layout, publishes the template's way:
 `publish_folder` and `publish_extension` find the csproj under `src/`, `publish_package` finds it
@@ -186,9 +202,9 @@ above the build output. A missing `package.info.json` is written from the csproj
 pin, the `ency-extension` tag) and the answer says so; an existing one gets the tag. The template's
 `Directory.Build.props` / `Directory.Build.targets` give any csproj under the repository the flat
 output and the `PackReady` target the workflow builds with (`update_extension` brings those two files
-into a repository made earlier) — which is why `update_extension` is not the tool for a project of
-its own shape: `PackReady` deletes `*.xml` from the output, and an operation can keep its definition
-in one. The one thing no tool can write is `<Name>.settings.json` — the extension's manifest of entry
+into a repository made earlier) — which is why `update_extension` refuses a project of its own shape
+(outside `src/` in a repository with no template workflow, or connected with `connect_to_store`):
+`PackReady` deletes `*.xml` from the output, and an operation can keep its definition in one. The one thing no tool can write is `<Name>.settings.json` — the extension's manifest of entry
 points, without which ENCY registers nothing; the template has a sample.
 
 ## Publishing without a console

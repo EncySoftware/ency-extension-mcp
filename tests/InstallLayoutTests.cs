@@ -134,6 +134,50 @@ public class InstallLayoutTests : IDisposable
         Assert.Contains(verdict.Notes, n => n.Contains("Helper.dll, which the package does not carry"));
     }
 
+    /**
+     * The icon the nuspec names sits at the root because NuGet wants it there. A copy of the same bytes
+     * the build keeps in Assets/ is no reason to call that a misplaced file — it sent the author to move
+     * their icon (review, 09.10.2026).
+     */
+    [Fact]
+    public void A_root_file_the_nuspec_names_is_not_a_failure_when_the_build_keeps_it_elsewhere()
+    {
+        string nupkg = Path.Combine(_dir, "icon.nupkg"), bin = Path.Combine(_dir, "bin");
+        Directory.CreateDirectory(Path.Combine(bin, "Assets"));
+        File.WriteAllText(Path.Combine(bin, "X.dll"), "MZ");
+        File.WriteAllText(Path.Combine(bin, "X.settings.json"), "{\"module_path\": \"${extensionJsonFolder}/X.dll\"}");
+        File.WriteAllText(Path.Combine(bin, "Assets", "icon.png"), "icon-bytes");
+        WriteZip(nupkg,
+            ("X.nuspec", "<package><metadata><id>X</id><version>1.0.0</version><icon>icon.png</icon></metadata></package>"),
+            ("build/X.settings.json", "{\"module_path\": \"${extensionJsonFolder}/X.dll\"}"), ("lib/net8.0/X.dll", "MZ"),
+            ("icon.png", "icon-bytes"));
+
+        var verdict = InstallLayout.Verify(nupkg, bin);
+
+        Assert.Empty(verdict.Failures);
+        Assert.Equal(new[] { "icon.png" }, verdict.NamedByNuspec.ToArray());
+    }
+
+    /** A folder named twice is said to be one, with what the value has to be — rerunning alone never changes it. */
+    [Fact]
+    public void A_doubled_folder_is_named_in_the_failure()
+    {
+        string nupkg = Path.Combine(_dir, "doubled.nupkg"), bin = Path.Combine(_dir, "bin");
+        Directory.CreateDirectory(Path.Combine(bin, "Hints"));
+        File.WriteAllText(Path.Combine(bin, "X.dll"), "MZ");
+        File.WriteAllText(Path.Combine(bin, "X.settings.json"), "{}");
+        File.WriteAllText(Path.Combine(bin, "Hints", "a.png"), "png");
+        WriteZip(nupkg, ("build/X.settings.json", "{}"), ("lib/net8.0/X.dll", "MZ"), ("build/Hints/Hints/a.png", "png"));
+
+        var failure = Assert.Single(InstallLayout.Verify(nupkg, bin).Failures);
+
+        Assert.StartsWith("build/Hints/Hints/a.png lands at Hints/Hints/a.png, but the Release build has it at Hints/a.png. "
+                          + "Hints/ is there twice: NuGet adds the item's own folder after its PackagePath by itself", failure);
+        Assert.Contains("plain build\\ for a file in the project's own folders", failure);
+        Assert.Equal("", InstallLayout.Doubled("a.png", "Images/a.png"));            // a wrong folder, not a doubled one
+        Assert.Contains("Data/ is there twice", InstallLayout.Doubled("Data/Data/Hints/a.png", "Data/Hints/a.png"));
+    }
+
     private static void WriteZip(string file, params (string Name, string Text)[] entries)
     {
         using var zip = new ZipArchive(File.Create(file), ZipArchiveMode.Create);

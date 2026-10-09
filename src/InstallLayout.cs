@@ -36,7 +36,9 @@ public static class InstallLayout
 
     /** Why a broken layout breaks, said once for every answer that reports one. */
     public const string Rule = "ENCY's store installer strips build/, content/ and lib/<tfm>/ and keeps any other folder "
-                             + "as it is, contentFiles/ included, so a runtime file belongs under build/ (PackagePath=\"build\\\").";
+                             + "as it is, contentFiles/ included, so a runtime file belongs under build/ (PackagePath=\"build\\\"). "
+                             + "NuGet adds the folder an item's wildcard matched after the PackagePath by itself (for <None Update=...>, "
+                             + "the file's folder in the project), so the PackagePath names only what comes before it.";
 
     // ---- copied from the installer: CAMStartPage.ExtensionStore/Services/NupkgInstaller.cs,
     //      PayloadRelativePath, IsOurBookkeeping and IsPackagingMetadata (ENC3 5f83953d).
@@ -205,17 +207,18 @@ public static class InstallLayout
             bool exists = build.Has(p.Installed);
             bool same = exists && build.Same(p.Installed, entry.Length, hash);
             if (same && !contentFiles) { atBuild++; continue; }
+            // The icon, readme or licence the nuspec names sits at the root because NuGet wants it there,
+            // whatever copy of the same bytes the build keeps elsewhere (an icon copied into Assets/, say).
+            if (!contentFiles && p.Installed.IndexOf('/') < 0 && meta.Contains(p.Installed)) { named.Add(p.Installed); continue; }
 
             string? elsewhere = same ? null : build.Find(entry.Length, hash, FileName(p.Installed));
             if (contentFiles)
                 failures.Add($"{p.Entry} lands at {p.Installed} — the installer keeps contentFiles/ as a folder of its own"
                              + (elsewhere != null ? $"; the Release build has it at {elsewhere}" : "") + ".");
             else if (elsewhere != null)
-                failures.Add($"{p.Entry} lands at {p.Installed}, but the Release build has it at {elsewhere}.");
+                failures.Add($"{p.Entry} lands at {p.Installed}, but the Release build has it at {elsewhere}." + Doubled(p.Installed, elsewhere));
             else if (exists)
                 notes.Add($"{p.Entry} lands at {p.Installed}, where the Release build has a different file — does the build change it?");
-            else if (p.Installed.IndexOf('/') < 0 && meta.Contains(p.Installed))
-                named.Add(p.Installed);
             else
                 notes.Add($"{p.Entry} lands at {p.Installed}; the Release build has no such file.");
         }
@@ -232,6 +235,25 @@ public static class InstallLayout
                       + "extension has to carry what it needs.");
 
         return new LayoutVerdict(failures, notes, placed.Count, atBuild, manifest?.Installed, module, named);
+    }
+
+    /**
+     * When a file lands one or more folders deeper than the build has it, and the extra part repeats a
+     * folder of the build path — Hints/Hints/a.png against Hints/a.png — the PackagePath named a folder
+     * NuGet appends by itself. Said, since that value is otherwise left as it is on every rerun.
+     */
+    internal static string Doubled(string installed, string atBuild)
+    {
+        if (!installed.EndsWith("/" + atBuild, StringComparison.OrdinalIgnoreCase)) return "";
+        var extra = installed[..^(atBuild.Length + 1)].Split('/');
+        var folder = atBuild.Split('/').SkipLast(1).ToArray();
+        // The extra part ends with what the build path begins with: Hints + Hints/a.png, Data + Data/Hints/a.png.
+        for (int k = Math.Min(extra.Length, folder.Length); k >= 1; k--)
+            if (extra.Skip(extra.Length - k).SequenceEqual(folder.Take(k), StringComparer.OrdinalIgnoreCase))
+                return $" {string.Join('/', folder.Take(k))}/ is there twice: NuGet adds the item's own folder after its PackagePath "
+                     + "by itself (for <None Update=...>, the file's folder in the project), so the PackagePath has to stop above "
+                     + "it - plain build\\ for a file in the project's own folders.";
+        return "";
     }
 
     /** "a.dll, b.dll and 3 more" — a list that stays one line. */

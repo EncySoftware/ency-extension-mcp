@@ -5,8 +5,22 @@ using System.Xml.Linq;
 
 namespace EncyExtensionMcp;
 
-/** One PackagePath changed: the line of its item in the csproj, the item, and the value before and after. */
-public sealed record PackagePathEdit(int Line, string Item, string Before, string After);
+/** Why a PackagePath changed. */
+public enum PathChange
+{
+    /** Moved out of contentFiles/, which ENCY's store installer keeps as a folder of its own. */
+    OutOfContentFiles,
+    /** A build\ or content\ value that put the files a folder off from where the Release build has them. */
+    WrongFolder,
+}
+
+/**
+ * One PackagePath changed: the line of its item in the csproj, the item, the value before and after,
+ * and why. Unchecked is set for an item the build does not copy: where its files land now, which no
+ * build can confirm — a sentence for the answer.
+ */
+public sealed record PackagePathEdit(int Line, string Item, string Before, string After,
+                                     PathChange Change = PathChange.OutOfContentFiles, string? Unchecked = null);
 
 /** The csproj text with the edits made, the edits, and the items a text edit cannot put right. */
 public sealed record PackagePathPlan(string Text, IReadOnlyList<PackagePathEdit> Edits, IReadOnlyList<string> Problems);
@@ -14,14 +28,19 @@ public sealed record PackagePathPlan(string Text, IReadOnlyList<PackagePathEdit>
 /// <summary>
 /// Moves a project's runtime files out of contentFiles/ in its package. ENCY's store installer keeps
 /// contentFiles/ as a folder of its own (see InstallLayout), so every file a csproj packs there has to
-/// land under build/ instead, in the same folder it has in the Release build output — the folder the
-/// extension reads it from when it runs.
+/// land under build/ instead — in the folder the extension reads it from when it runs.
 ///
-/// <para>Where NuGet puts a packed item: the PackagePath, then the folder its wildcard matched
+/// <para>For an item the build copies, that folder is the one it has in the Release build output.
+/// Where NuGet puts a packed item: the PackagePath, then the folder its wildcard matched
 /// (RecursiveDir), then the file name. So the new value is <c>build\</c> plus the item's folder in the
 /// build output WITHOUT the part NuGet appends by itself. That part is what doubled
 /// <c>SmartHintImages\SmartHintImages\</c> in a real package (08.10.2026): an Update of the SDK's own
-/// <c>**/*</c> item already carries its folder, so the right value for it is plain <c>build\</c>.</para>
+/// <c>**/*</c> item already carries its folder, so the right value for it is plain <c>build\</c>. A
+/// build\ or content\ value that doubles a folder the same way is corrected too.</para>
+///
+/// <para>An item the build does not copy has no place in the build output to go by, so it keeps the
+/// place the author's own PackagePath gave it under contentFiles/, and the answer says so: guessing
+/// it into its source folder moved pictures away from where the author put them (review, 09.10.2026).</para>
 ///
 /// <para>A text edit, never a rewrite: only the value between the quotes changes, so the byte order
 /// mark, the line endings and everything else in the author's file stay as they were. An item whose
@@ -67,33 +86,74 @@ public static class PackagePathFix
                 bool packed = IsTrue(Meta(el, "Pack")) || (kind.Equals("Content", StringComparison.OrdinalIgnoreCase) && !IsFalse(Meta(el, "Pack")));
                 if (packed && defaultHasContentFiles && misspelt == null && !specsWithPath.Contains(item) && IsPayload(kind))
                 {
+                    // NuGet's default places it by its folder in the project, copied or not — so does the hint.
                     string? t = Target(el, projectDir, defaultNoneOff, out _);
                     problems.Add($"{where}: packed without a PackagePath, so NuGet puts it under content/ and contentFiles/ both"
                                  + (t != null ? $" - give it PackagePath=\"build\\{t}\"" : " - give it a PackagePath under build\\") + ".");
                 }
                 continue;
             }
+            if (IsFalse(Meta(el, "Pack"))) continue;
 
             var parts = Split(value);
-            if (!parts.Any(IsContentFiles) || IsFalse(Meta(el, "Pack"))) continue;
-            if (!IsPayload(kind))
+            char sep = value.Contains('\\') || !value.Contains('/') ? '\\' : '/';
+            string? ext = Extension(item);
+            string after;
+            var change = PathChange.OutOfContentFiles;
+            string? notCopied = null;
+
+            if (parts.Any(IsContentFiles))
             {
-                problems.Add($"{where}: a {kind} item is not a file the build copies next to the dll, so where it belongs cannot "
-                             + "be read off the build - set its PackagePath under build\\ by hand, or stop packing it.");
-                continue;
+                if (!IsPayload(kind))
+                {
+                    problems.Add($"{where}: a {kind} item is not a file the build copies next to the dll, so where it belongs cannot "
+                                 + "be read off the build - set its PackagePath under build\\ by hand, or stop packing it.");
+                    continue;
+                }
+                if (Copied(el, items, doc))
+                {
+                    // The build has the file: it belongs where the build has it.
+                    string? target = Target(el, projectDir, defaultNoneOff, out string why);
+                    if (target == null)
+                    {
+                        problems.Add($"{where}: {why}.");
+                        continue;
+                    }
+                    string computed = "build" + sep + target.Replace('\\', sep);
+                    after = Joined(parts.Where(p => !IsContentFiles(p) && !LandsElsewhere(p, computed, ext)), computed);
+                }
+                else
+                {
+                    // No build to go by: the place the author's own value gave it under contentFiles/ stands.
+                    var subs = parts.Where(IsContentFiles).Select(p => SubPath(p, sep)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    if (subs.Count > 1)
+                    {
+                        problems.Add($"{where}: the build does not copy it, and its PackagePath names several folders under contentFiles/ "
+                                     + $"({string.Join(", ", subs.Select(Shown))}), so which one the extension reads cannot be told - "
+                                     + "set its PackagePath under build\\ by hand.");
+                        continue;
+                    }
+                    string computed = "build" + sep + subs[0];
+                    after = Joined(parts.Where(p => !IsContentFiles(p)), computed);
+                    notCopied = UncheckedNote(el, subs[0], defaultNoneOff, CopySetting(el, items, doc));
+                }
             }
-            string? target = Target(el, projectDir, defaultNoneOff, out string why);
-            if (target == null)
+            else
             {
-                problems.Add($"{where}: {why}.");
-                continue;
+                // build\ or content\ already, but a folder off from where the Release build has the files —
+                // the doubling contentFiles/ had, written under another folder. Only where the build copies
+                // the item: without the build there is nothing to measure the value against.
+                if (!IsPayload(kind) || !Packed(el, items) || !Copied(el, items, doc)) continue;
+                if (!parts.Any(p => IsFlatFolder(p, ext))) continue;
+                string? target = Target(el, projectDir, defaultNoneOff, out _);
+                if (target == null) continue;   // the check pack still says where its files land
+                string computed = "build" + sep + target.Replace('\\', sep);
+                if (!parts.Any(p => LandsElsewhere(p, computed, ext))) continue;
+                after = Joined(parts.Where(p => !LandsElsewhere(p, computed, ext)), computed);
+                change = PathChange.WrongFolder;
             }
 
-            char sep = value.Contains('\\') || !value.Contains('/') ? '\\' : '/';
-            string computed = "build" + sep + target.Replace('\\', sep);
-            var kept = parts.Where(p => !IsContentFiles(p)).ToList();
-            if (!kept.Any(p => SameFolder(p, computed))) kept.Add(computed);
-            string after = string.Join(";", kept);
+            if (after == value) continue;
             if (after.IndexOfAny(new[] { '"', '\'', '&', '<', '>', '%', '$', '@' }) >= 0)
             {
                 problems.Add($"{where}: the folder it needs ({after}) holds characters MSBuild or XML treat specially - set it by hand.");
@@ -105,13 +165,121 @@ public static class PackagePathFix
                 continue;
             }
             splices.Add((span.Start, span.Length, after));
-            edits.Add(new PackagePathEdit(line, item, value, after));
+            edits.Add(new PackagePathEdit(line, item, value, after, change, notCopied));
         }
 
         var sb = new StringBuilder(text);
         foreach (var (start, length, v) in splices.OrderByDescending(s => s.Start))
             sb.Remove(start, length).Insert(start, v);
         return new PackagePathPlan(sb.ToString(), edits, problems);
+    }
+
+    /** The values kept, plus the computed one unless one of them lands there already. */
+    private static string Joined(IEnumerable<string> kept, string computed)
+    {
+        var list = kept.ToList();
+        if (!list.Any(p => SameFolder(p, computed))) list.Add(computed);
+        return string.Join(";", list);
+    }
+
+    /**
+     * A build\ or content\ folder value that puts the item's files in another folder than `computed`
+     * does. Only folder values are compared: a value naming the file itself takes no folder from NuGet,
+     * and a computed one-file value is left to the check pack.
+     */
+    private static bool LandsElsewhere(string part, string computed, string? ext) =>
+        IsFlatFolder(part, ext) && !IsFileForm(computed, ext) && !SameFolder(part, computed);
+
+    /** build\… or content\… naming a folder (not the file itself) — the two NuGet folders ENCY flattens. */
+    private static bool IsFlatFolder(string value, string? ext)
+    {
+        string first = value.Replace('/', '\\').TrimStart('\\').Split('\\')[0];
+        return (first.Equals("build", StringComparison.OrdinalIgnoreCase) || first.Equals("content", StringComparison.OrdinalIgnoreCase))
+               && !IsFileForm(value, ext);
+    }
+
+    /**
+     * Whether NuGet takes the value as the file's own path: its last segment has the file's extension.
+     * With the extension unknown (a pattern like `*`), any extension counts — then nothing is touched.
+     */
+    private static bool IsFileForm(string value, string? ext)
+    {
+        string last = value.Replace('/', '\\').Split('\\')[^1];
+        string e = Path.GetExtension(last);
+        return e.Length > 0 && (ext == null || e.Equals(ext, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /** The one extension every file of the item has ("" for none); null when its patterns do not say (`*`, `*.*`). */
+    private static string? Extension(string spec)
+    {
+        var exts = Split(spec).Select(p =>
+        {
+            string last = p.Replace('/', '\\').Split('\\')[^1];
+            string e = Path.GetExtension(last);
+            return e.IndexOfAny(Wildcards) >= 0 || (e.Length == 0 && last.IndexOfAny(Wildcards) >= 0) ? null : e;
+        }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return exts.Count == 1 ? exts[0] : null;
+    }
+
+    /** contentFiles\<lang>\<tfm>\Rest → Rest: where the author's value put the file, below the folders NuGet itself reads. */
+    private static string SubPath(string contentFilesValue, char sep)
+    {
+        var segs = contentFilesValue.Replace('/', '\\').TrimStart('\\').Split('\\');
+        return segs.Length <= 3 ? "" : string.Join(sep, segs.Skip(3));
+    }
+
+    /**
+     * For an item the build does not copy: where its files land now that its value is under build\,
+     * and why the build cannot confirm it — with the doubled folder named when the value repeats the
+     * folder NuGet appends anyway.
+     */
+    private static string UncheckedNote(XElement el, string sub, bool defaultNoneOff, string? copySetting)
+    {
+        string spec = Attr(el, "Include") ?? Attr(el, "Update")!;
+        bool isUpdate = Attr(el, "Include") == null;
+        var patterns = Split(spec);
+        string subDir = sub.Replace('\\', '/').Trim('/');
+        string? doubled = null;
+        string lands;
+        if (subDir.Length > 0 && IsFileForm(sub, Extension(spec)))
+            lands = $"at {subDir}";
+        else
+        {
+            string head = subDir.Length == 0 ? "" : subDir + "/";
+            // What NuGet appends: for an Update of the SDK's own **/* item, the file's folder in the
+            // project; for an Include, the folder its ** matched. Unknown for an Update of an item the
+            // project includes itself.
+            string? appended;
+            if (isUpdate)
+            {
+                var dirs = patterns.Select(FixedFolder).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                appended = !defaultNoneOff && el.Name.LocalName.Equals("None", StringComparison.OrdinalIgnoreCase) && dirs.Count == 1 ? dirs[0] : null;
+            }
+            else appended = patterns.Any(p => p.Contains("**")) ? null : "";
+            if (appended == null)
+                lands = $"under {(head.Length == 0 ? "the extension's folder" : head)}, in the folder{(isUpdate ? " each file has in the project" : "s its ** matched")}";
+            else
+            {
+                string folder = head + (appended.Length == 0 ? "" : appended.Replace('\\', '/').Trim('/') + "/");
+                lands = folder.Length == 0 ? "in the extension's folder, next to the dll" : $"under {folder}";
+                string r = appended.Replace('\\', '/').Trim('/');
+                if (r.Length > 0 && (subDir.Equals(r, StringComparison.OrdinalIgnoreCase) || subDir.EndsWith("/" + r, StringComparison.OrdinalIgnoreCase)))
+                    doubled = $" NuGet adds the file's own folder ({r}/) after the PackagePath, so it appears twice, as it did under "
+                              + $"contentFiles/; if the extension reads {r}/<file>, its PackagePath is plain build\\.";
+            }
+        }
+        string why = string.IsNullOrWhiteSpace(copySetting) ? "no CopyToOutputDirectory" : $"CopyToOutputDirectory is {copySetting.Trim()}";
+        return $"the build does not copy it to its output ({why}), so no build says where the extension "
+             + $"reads it: it keeps the place its PackagePath gave it under contentFiles/ and lands {lands}." + doubled
+             + " Check that the extension looks for it there.";
+    }
+
+    /** The folder of a pattern with no wildcard folder in it ("" for a file of the project's own folder); null when it has one. */
+    private static string? FixedFolder(string pattern)
+    {
+        var segs = pattern.Replace('/', '\\').Split('\\');
+        if (segs.Take(segs.Length - 1).Any(s => s.IndexOfAny(Wildcards) >= 0)) return null;
+        return string.Join('\\', segs.Take(segs.Length - 1));
     }
 
     /**
@@ -254,6 +422,44 @@ public static class PackagePathFix
     /** Item metadata: an attribute, or a child element of that name. */
     private static string? Meta(XElement el, string name) =>
         el.Attribute(name)?.Value ?? el.Elements().FirstOrDefault(c => c.Name.LocalName == name)?.Value;
+
+    /**
+     * Item metadata as the item ends up with it: this element's own, else the last element of the
+     * same kind naming the same files that sets it — MSBuild applies them in order.
+     */
+    private static string? MetaAcross(XElement el, List<XElement> items, string name)
+    {
+        if (Meta(el, name) is { } own) return own;
+        string spec = Spec(el);
+        return items.Where(o => o != el && o.Name.LocalName.Equals(el.Name.LocalName, StringComparison.OrdinalIgnoreCase)
+                                && Spec(o).Equals(spec, StringComparison.OrdinalIgnoreCase))
+                    .Select(o => Meta(o, name)).LastOrDefault(v => v != null);
+    }
+
+    private static string Spec(XElement el) => (Attr(el, "Include") ?? Attr(el, "Update") ?? "").Trim().Replace('/', '\\');
+
+    /**
+     * Whether the build copies the item's files to its output — the only items whose place in the
+     * Release build says where they belong. Read off the text: the element, another element naming the
+     * same files, or the project's item definitions.
+     */
+    private static bool Copied(XElement el, List<XElement> items, XDocument doc) =>
+        CopySetting(el, items, doc) is { } v && v.Trim().Length > 0 && !v.Trim().Equals("Never", StringComparison.OrdinalIgnoreCase);
+
+    /** The item's CopyToOutputDirectory as written; null when nothing sets it. */
+    private static string? CopySetting(XElement el, List<XElement> items, XDocument doc) =>
+        MetaAcross(el, items, "CopyToOutputDirectory")
+        ?? doc.Root!.Elements().Where(g => g.Name.LocalName == "ItemDefinitionGroup")
+              .SelectMany(g => g.Elements())
+              .Where(d => d.Name.LocalName.Equals(el.Name.LocalName, StringComparison.OrdinalIgnoreCase))
+              .Select(d => Meta(d, "CopyToOutputDirectory")).LastOrDefault(x => x != null);
+
+    /** Whether NuGet packs the item at all: Content unless Pack="false", anything else only with Pack="true". */
+    private static bool Packed(XElement el, List<XElement> items)
+    {
+        string? pack = MetaAcross(el, items, "Pack");
+        return el.Name.LocalName.Equals("Content", StringComparison.OrdinalIgnoreCase) ? !IsFalse(pack) : IsTrue(pack);
+    }
 
     /** A property of the project, the first one written — conditions are not evaluated. */
     private static string? Property(XDocument doc, string name) =>

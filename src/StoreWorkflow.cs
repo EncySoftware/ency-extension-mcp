@@ -17,6 +17,10 @@ public static class StoreWorkflow
     /** Some EncySoftware.CAMAPI.SDK.Net versions are published here only (3.0.15, for one). */
     public const string EncyNexus = "https://nexus.encycam.com/repository/master/index.json";
 
+    private static readonly Regex CsprojToken = new(
+        @"""(?<p>[^""\r\n]+?\.csproj)""|'(?<p>[^'\r\n]+?\.csproj)'|(?<p>[^\s""'=]+\.csproj)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /**
      * The SDK line setup-dotnet installs for a target framework; null for any other framework. ENCY 3
      * extensions target .NET 8, 9 or 10 — a new one is added here when ENCY moves to it.
@@ -39,15 +43,114 @@ public static class StoreWorkflow
                 .Replace("__DOTNET__", dotnetVersion)
                 .Replace("\n", newline);
 
+    // ---- reading a repository that has one
+
+    /**
+     * This workflow in the repository the folder sits in (or in the folder itself, outside git);
+     * null when there is none. A repository that has it publishes the connect_to_store way.
+     */
+    public static string? Find(string dir)
+    {
+        foreach (var root in new[] { GitRepository.Root(dir), Path.GetFullPath(dir) })
+        {
+            if (root == null) continue;
+            string file = Path.Combine(root, ".github", "workflows", FileName);
+            if (File.Exists(file)) return file;
+        }
+        return null;
+    }
+
+    /** The repository root a workflow file belongs to: two folders above .github/workflows/. */
+    public static string RepositoryOf(string workflowFile) =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(workflowFile)!, "..", ".."));
+
+    /**
+     * Every csproj a workflow names outside its comments, '/'-separated, in order — what its pack step
+     * builds. A workflow that names none packs whatever its folder holds, which cannot be told here.
+     */
+    public static IReadOnlyList<string> PackedProjects(string yaml)
+    {
+        var found = new List<string>();
+        foreach (var line in yaml.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (line.TrimStart().StartsWith('#')) continue;
+            foreach (Match m in CsprojToken.Matches(line))
+            {
+                string p = Normalize(m.Groups["p"].Value);
+                if (p.Length > 0 && !found.Contains(p, StringComparer.OrdinalIgnoreCase)) found.Add(p);
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Whether a csproj path from a workflow is this project, given as a path in the repository: the
+     * same path, or the end of it when the step runs from a folder further down.
+     */
+    public static bool SameProject(string named, string relProject)
+    {
+        string a = Normalize(named), b = Normalize(relProject);
+        return a.Equals(b, StringComparison.OrdinalIgnoreCase)
+            || b.EndsWith("/" + a, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /**
+     * The package id of the project a connected repository publishes: the csproj its workflow packs,
+     * read for <PackageId>, then <AssemblyName>, then its file name — NuGet's own order. Null when
+     * the workflow names no csproj, or the one it names is not in the repository.
+     */
+    public static string? PackageIdOf(string workflowFile)
+    {
+        try
+        {
+            var named = PackedProjects(File.ReadAllText(workflowFile));
+            if (named.Count == 0) return null;
+            string csproj = Path.Combine(RepositoryOf(workflowFile), named[0].Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(csproj)) return null;
+            string text = File.ReadAllText(csproj);
+            return ProjectLayout.CsprojProperty(text, "PackageId") ?? ProjectLayout.CsprojProperty(text, "AssemblyName")
+                   ?? Path.GetFileNameWithoutExtension(csproj);
+        }
+        catch (Exception) { return null; }
+    }
+
+    /** A workflow other than this one that publishes to the store already — the template's, for one. */
+    public static string? OtherStoreWorkflow(string repo) =>
+        Workflows(Path.Combine(repo, ".github", "workflows"))
+            .FirstOrDefault(f => Read(f)?.Contains("publish-extension-action", StringComparison.OrdinalIgnoreCase) == true)
+            is { } file ? Path.GetFileName(file) : null;
+
+    /** The workflow files of a folder other than this one, in name order. */
+    public static IEnumerable<string> Workflows(string dir) =>
+        !Directory.Exists(dir) ? Enumerable.Empty<string>()
+        : Directory.EnumerateFiles(dir)
+            .Where(f => f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !Path.GetFileName(f).Equals(FileName, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+
+    private static string Normalize(string path)
+    {
+        string p = path.Trim().Replace('\\', '/');
+        while (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
+        return p;
+    }
+
+    private static string? Read(string path)
+    {
+        try { return File.ReadAllText(path); }
+        catch (Exception) { return null; }
+    }
+
     // Verified on DirectCladdingOperation (08.10.2026): the pack step for real, the YAML parsed and the
     // version step tested. Kept in step with the template's publish.yml where they do the same thing.
     private const string Template = """
         # Publishes this extension to the ENCY Extension Store (https://apps.encycam.com).
         #   - push a tag vX.Y.Z         -> publishes version X.Y.Z
         #   - Actions -> Run workflow   -> publishes the version you type; tick "dry run" to only check it
-        # No secrets: the run signs in to the store with its own GitHub token (OIDC). The store credits the
-        # run to whoever started it, so that person links their GitHub account once in the store profile
-        # (apps.encycam.com -> Profile -> Sign in with GitHub) and must own the extension's card there.
+        # No secrets: the run signs in to the store with its own GitHub token (OIDC). The first publish
+        # binds this repository to the extension: start it as the extension's owner in the store, with
+        # that GitHub account linked there (apps.encycam.com -> Profile -> Sign in with GitHub). After
+        # that every run from this repository is credited to that owner, whoever starts it.
         # Added by ency-extension-mcp (connect_to_store); the other workflows here were left as they were.
 
         name: Publish to ENCY Extension Store
