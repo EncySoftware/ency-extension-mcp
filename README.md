@@ -6,14 +6,19 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 | Tool | What it does |
 |---|---|
 | `create_extension_folder` | The project from the template on this machine, renamed — no GitHub account, no git. Start here. |
+| `check_extension` | Reads an extension folder before it is published, with nothing built or uploaded: the name the store would use, the card's text and category, the identifiers ENCY will ask for, the target framework and the Schedule A answer (`reservedDomains`). `publish_folder` runs the same checks itself. |
 | `publish_folder` | Publishes a local folder with no git and no gh: the store makes the repository, commits the folder, builds and publishes; the author only signs in and approves the store app in the browser. |
 | `publish_folder_status` | The latest publish_folder result: building, published (version + card), or failed (step + log). |
+| `check_package` | Reads a ready `.nupkg` before it is published, with no sign-in and nothing uploaded: the `ency-extension` tag, the manifest and dll the store requires, whether the manifest finds its dll once ENCY's store installer has laid the package out, the category tag, screenshots, readme, icon, whether its SDK has shipped in a released ENCY, and the Schedule A answer. `publish_package` runs the same checks first. |
 | `publish_package` | Publishes what you built on THIS machine — a ready `.nupkg` or a build-output folder the store packs. No git, no GitHub, no repository; the card is yours. |
 | `connect_to_store` | For a project NOT made from the template, in a GitHub repository of its own and packed with `dotnet pack`: moves what the csproj packs under `contentFiles/` (which the store installer in ENCY keeps as a subfolder away from the dll, so the extension would install and not register) or into a folder named twice to `build\`, adds `.github/workflows/publish_store.yml`, and proves both with a real pack laid out the way the store tab in ENCY installs it. A version tag then publishes — `publish_extension` pushes it, `publish_status` follows the run. |
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
 | `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
+| `update_extension` | Brings an extension made from the template in line with the current template: an SDK pin above the line the store publishes under is lowered, the files the template owns (its publish workflow, the assistant's rules, the MCP registration, `nuget.config`, `Directory.Build.props`/`.targets`) are refreshed, and a missing `package.info.json` is written; the author's code is left alone. A project of its own shape is refused — `connect_to_store` is for that one. |
+| `my_extensions` | Every card of the signed-in author, what needs attention first: a failing build (its step and run link), a rejected card (the moderator's reason), one waiting for a moderator; then the live ones with their links, then the hidden. Read-only. |
 | `get_extension_guide` | The skill library: which of the eight ENCY entry points to implement, how to register it, a minimal skeleton and the traps. `type=list` first, then the type. |
+| `doctor` | The machine in one answer: the tool's version and whether a newer one is out, the .NET SDK, git and gh, whether the store answers, who is signed in, whether Cursor lists the server — each gap with the command that fixes it. Call it first when a publish fails for no clear reason. |
 
 Auth model: the server shells out to the **author's own `gh` and `git`** — your GitHub login is
 the credential there. For the store, `ency-extension-mcp login` (once) **opens the ENCY sign-in page
