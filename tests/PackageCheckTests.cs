@@ -18,15 +18,17 @@ public class PackageCheckTests
 
     private static MemoryStream Nupkg(string tags = "ency-extension category:analyzer", bool manifest = true, bool dll = true,
                                       bool readme = true, bool icon = true, int screenshots = 2, string? sdk = "3.0.6",
-                                      bool declared = true)
+                                      bool declared = true, string? nuspecSdk = null)
     {
         var ms = new MemoryStream();
         using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
         {
+            string dependencies = nuspecSdk == null ? ""
+                : $"<dependencies><group targetFramework=\"net10.0-windows7.0\"><dependency id=\"EncySoftware.CAMAPI.SDK.Net\" version=\"{nuspecSdk}\" /></group></dependencies>";
             Add(zip, "MyExt.nuspec", $"""
                 <?xml version="1.0"?>
                 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
-                  <metadata><id>MyExt</id><version>0.1.0</version><tags>{tags}</tags></metadata>
+                  <metadata><id>MyExt</id><version>0.1.0</version><tags>{tags}</tags>{dependencies}</metadata>
                 </package>
                 """);
             if (manifest) Add(zip, "build/MyExt.settings.json", "{}");
@@ -113,6 +115,47 @@ public class PackageCheckTests
         Assert.DoesNotContain(PackageCheck.Findings(PackageCheck.Read(Nupkg(sdk: "3.0.6")), Known, "3.0.8"), n => n.Text.Contains("newer"));
         // Without the store's number nothing can be compared, and nothing is claimed.
         Assert.DoesNotContain(PackageCheck.Findings(f, Known, null), n => n.Text.Contains("newer"));
+    }
+
+    /**
+     * Both a manifest and a dll inside, which is all the store and this check used to ask — and ENCY
+     * installs it as files that never register: the installer keeps contentFiles/ as it is, so the
+     * manifest looks for its dll in there (DirectCladdingOperation, 08.10.2026).
+     */
+    [Fact]
+    public void A_manifest_that_would_not_find_its_dll_after_installation_stops_the_publish()
+    {
+        string file = Path.Combine(Path.GetTempPath(), "mcp-dco-" + Guid.NewGuid().ToString("N")[..8] + ".nupkg");
+        try
+        {
+            DcoFixture.WritePackage(file, "contentFiles");
+            var f = PackageCheck.TryRead(file)!;
+
+            var stop = Assert.Single(PackageCheck.Findings(f, Known, "3.0.15", new DateOnly(2026, 10, 15)), x => x.Blocking);
+            Assert.Contains("the manifest lands at contentFiles/any/any/DirectCladdingOperationExtension.settings.json", stop.Text);
+            Assert.Contains("the dll lands at DirectCladdingOperationExtension.dll (from lib/net10.0-windows7.0/DirectCladdingOperationExtension.dll)", stop.Text);
+            Assert.Contains("PackagePath=\"build\\\"", stop.Text);
+            Assert.Contains("connect_to_store", stop.Text);
+
+            DcoFixture.WritePackage(file, "build");
+            Assert.DoesNotContain(PackageCheck.Findings(PackageCheck.TryRead(file)!, Known, "3.0.15", new DateOnly(2026, 10, 15)), x => x.Blocking);
+        }
+        finally { File.Delete(file); }
+    }
+
+    /** A package made with `dotnet pack` names its SDK in the nuspec only; the store reads it there too. */
+    [Fact]
+    public void The_SDK_is_read_from_the_nuspec_dependency_as_well_and_the_higher_one_wins()
+    {
+        var onlyNuspec = PackageCheck.Read(Nupkg(sdk: null, nuspecSdk: "[3.0.15]"));
+        Assert.Equal("3.0.15", onlyNuspec.SdkVersion);
+        Assert.DoesNotContain(PackageCheck.Findings(onlyNuspec, Known, "3.0.15"), n => n.Text.Contains("names no SDK version"));
+
+        Assert.Equal("3.0.15", PackageCheck.Read(Nupkg(sdk: "3.0.8", nuspecSdk: "3.0.15")).SdkVersion);
+        Assert.Equal("3.0.9", PackageCheck.Read(Nupkg(sdk: "3.0.9", nuspecSdk: "3.0.8")).SdkVersion);
+
+        var none = PackageCheck.Read(Nupkg(sdk: null));
+        Assert.Contains(PackageCheck.Findings(none, Known, "3.0.15"), n => n.Text.Contains("names no SDK version") && !n.Blocking);
     }
 
     [Fact]

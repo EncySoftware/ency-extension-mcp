@@ -29,6 +29,21 @@ public class ToolConstructionTests
         Assert.IsType(type, instance);
     }
 
+    /**
+     * connect_to_store's class, built as the SDK builds it, answers a call: the runner comes from the
+     * container, the log, the update check's fallback and the clock from their defaults.
+     */
+    [Fact]
+    public async Task The_connect_tool_built_the_sdk_way_answers_a_call()
+    {
+        using var services = new ServiceCollection().AddStoreServices().BuildServiceProvider();
+        var tools = (ConnectTools)ActivatorUtilities.CreateInstance(services, typeof(ConnectTools));
+
+        string answer = await tools.ConnectToStore(Path.Combine(Path.GetTempPath(), "no-such-folder-" + Guid.NewGuid().ToString("N")));
+
+        Assert.StartsWith("ERROR: there is no folder at", answer);
+    }
+
     /** The theory above proves nothing if it finds no classes to build. */
     [Fact]
     public void The_tool_classes_are_found()
@@ -37,5 +52,6 @@ public class ToolConstructionTests
         Assert.Contains("FolderPublishTools", names);
         Assert.Contains("LocalPublishTools", names);
         Assert.Contains("ExtensionStoreTools", names);
+        Assert.Contains("ConnectTools", names);
     }
 }

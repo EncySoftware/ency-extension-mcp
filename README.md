@@ -9,6 +9,7 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 | `publish_folder` | Publishes a local folder with no git and no gh: the store makes the repository, commits the folder, builds and publishes; the author only signs in and approves the store app in the browser. |
 | `publish_folder_status` | The latest publish_folder result: building, published (version + card), or failed (step + log). |
 | `publish_package` | Publishes what you built on THIS machine — a ready `.nupkg` or a build-output folder the store packs. No git, no GitHub, no repository; the card is yours. |
+| `connect_to_store` | For a project NOT made from the template, in a GitHub repository of its own and packed with `dotnet pack`: moves what the csproj packs under `contentFiles/` to `build\`, adds `.github/workflows/publish_store.yml`, and proves both with a real pack laid out the way ENCY installs it. A version tag then publishes. |
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
 | `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
@@ -78,9 +79,12 @@ Today that first publication comes back with its card link; a store that reviews
 
 `check_package [path]` (or `ency-extension-mcp check-package`) reads a ready `.nupkg` before any of
 that, with no sign-in and nothing uploaded: the `ency-extension` tag the catalogue needs, the
-manifest and assembly the store requires, the `category:` tag, screenshots, readme, icon, and whether
-the SDK it was built against has shipped in a released ENCY. `publish_package` runs the same checks
-first, so a package the store would refuse never opens the browser; the rest come back as notes under
+manifest and assembly the store requires, whether the manifest finds its dll once ENCY's store
+installer has laid the package out (see below — a manifest packed under `contentFiles/` does not),
+the `category:` tag, screenshots, readme, icon, and whether the SDK it was built against (from
+`package.info.json` or the nuspec's dependency on `EncySoftware.CAMAPI.SDK.Net`) has shipped in a
+released ENCY. `publish_package` runs the same checks first, so a package the store would refuse, or
+ENCY would install without registering, never opens the browser; the rest come back as notes under
 the result. For a source folder the counterpart is `check_extension`.
 
 ## What the store asks the publisher to declare
@@ -141,15 +145,51 @@ Two consents, neither of which this tool can give on the author's behalf:
 
 ## Already have a project that was not made from the template?
 
-Keep it as it is. Every publish route takes a project of its own: `publish_folder` and
-`publish_extension` find the csproj under `src/`, `publish_package` finds it above the build output.
-A missing `package.info.json` is written from the csproj (name, version, SDK pin, the
-`ency-extension` tag) and the answer says so; an existing one gets the tag. The template's
+Keep it as it is. A project in a GitHub repository of its own, packed with `dotnet pack` — the usual
+shape of an extension that was on nuget.org before the store — is connected with
+`connect_to_store [path]`:
+
+```
+ency-extension-mcp connect-to-store                     # the repository or project folder you are in
+ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyExtension.csproj
+```
+
+- It finds the extension's csproj: the one that references `EncySoftware.CAMAPI.SDK.Net` or packs a
+  `*.settings.json`. With several, it lists them and asks for `csproj`.
+- It moves what the csproj packs under `contentFiles/` to `build\`. ENCY's store installer merges
+  `build/`, `content/` and `lib/<tfm>/` into one folder next to the dll and keeps every other folder
+  as it is, so a manifest packed under `contentFiles/any/any/` looks for its dll in that folder and the
+  extension installs without ever registering. The new value is `build\` plus the file's folder in
+  the Release build, minus the folder NuGet appends by itself (`<None Update="Images\*.png">` gets
+  plain `build\`, or the pictures land in `Images\Images\`). Only the value between the quotes
+  changes: the byte order mark, the line endings and every other line stay as they were. An item a
+  text edit cannot put right is listed instead, with what it needs.
+- It adds `.github/workflows/publish_store.yml`, never overwriting one and never touching the other
+  workflows: a `vX.Y.Z` tag, or **Actions → Run workflow** with a version (and **dry run** to have
+  the store only check the package), packs the project on GitHub — Release, nuget.org and the ENCY
+  Nexus as sources (some SDK versions are only there), NU1603 as an error — and publishes the `.nupkg`
+  with the run's own GitHub token. No secrets.
+- It proves both with a real `dotnet pack` on this machine (so it needs the .NET SDK the project
+  targets), laid out the way ENCY installs it and compared with the Release build: the manifest has
+  to find its dll, every file has to land where the build has it, nothing under `contentFiles/`, no
+  two files on one path. When that fails, both changes are taken back and the answer says what would
+  land where.
+
+It writes no `package.info.json` and no Schedule A answer. The answer ends with what only the author
+can do, once, in the browser — sign in at [apps.encycam.com](https://apps.encycam.com), the developer
+registration and the terms on the Publish page, **Sign in with GitHub** in the profile (a run is
+credited to whoever starts it), owning the card — and with how to publish.
+
+A project made from the template, or brought into its `src/` layout, publishes the template's way:
+`publish_folder` and `publish_extension` find the csproj under `src/`, `publish_package` finds it
+above the build output. A missing `package.info.json` is written from the csproj (name, version, SDK
+pin, the `ency-extension` tag) and the answer says so; an existing one gets the tag. The template's
 `Directory.Build.props` / `Directory.Build.targets` give any csproj under the repository the flat
-output and the `PackReady` target the workflow builds with, so the author's own csproj needs no edit
-(`update_extension` brings those two files into a repository made earlier). The one thing the tool
-cannot write is `<Name>.settings.json` — the extension's manifest of entry points, without which
-ENCY registers nothing; the template has a sample.
+output and the `PackReady` target the workflow builds with (`update_extension` brings those two files
+into a repository made earlier) — which is why `update_extension` is not the tool for a project of
+its own shape: `PackReady` deletes `*.xml` from the output, and an operation can keep its definition
+in one. The one thing no tool can write is `<Name>.settings.json` — the extension's manifest of entry
+points, without which ENCY registers nothing; the template has a sample.
 
 ## Publishing without a console
 
@@ -172,9 +212,11 @@ repository after the extension (the first push renames everything inside);
 put the code in `src/`, then **Actions → publish-to-ency-store → Run workflow** with the fields
 empty. Version, tag, build, publish — all on their own.
 
-**Already have a project that was not made from the template?** Keep it. The template README
-has the exact list of what to bring over (the `src/` layout, the `PackReady` target, the workflow);
-then connect the repository to the name — in the browser, or with
+**Already have a project that was not made from the template?** Keep it. One packed with
+`dotnet pack` in a repository of its own needs nothing brought over: `connect_to_store` (above) gives
+it a workflow as it is. Otherwise the template README has the exact list of what to bring over (the
+`src/` layout, the `PackReady` target, the workflow); then connect the repository to the name — in
+the browser, or with
 
 ```bash
 ency-extension-mcp claim MyCoolExtension owner/MyCoolExtension
@@ -199,7 +241,8 @@ to register it. What you call inside them lives elsewhere:
 
 ## Setup (Cursor)
 
-Prerequisites: .NET 8 SDK, `git`, `gh` (`gh auth login` once).
+Prerequisites: .NET 8 SDK, `git`, `gh` (`gh auth login` once). `connect_to_store` packs your project
+to check it, so it also needs the SDK your extension targets (.NET 10 for ENCY 3.1).
 
 Two commands:
 

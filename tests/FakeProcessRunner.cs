@@ -3,12 +3,18 @@ using EncyExtensionMcp;
 /// <summary>Scripted process runner: match by "file args-prefix", record every call.</summary>
 public class FakeProcessRunner : IProcessRunner
 {
-    private readonly List<(string Prefix, ProcResult Result)> _rules = new();
+    private readonly List<(string Prefix, Func<string, ProcResult> Run)> _rules = new();
     public List<string> Calls { get; } = new();
+    /** Every call with what Calls leaves out: where it ran, its environment and its time limit. */
+    public List<(string Call, string? WorkingDir, IDictionary<string, string>? Env, int Timeout)> Runs { get; } = new();
 
-    public FakeProcessRunner On(string prefix, int exit = 0, string stdout = "", string stderr = "")
+    public FakeProcessRunner On(string prefix, int exit = 0, string stdout = "", string stderr = "") =>
+        On(prefix, _ => new ProcResult(exit, stdout, stderr));
+
+    /** A rule that acts as well as answers — `dotnet pack` writing its package, say. Gets the arguments. */
+    public FakeProcessRunner On(string prefix, Func<string, ProcResult> run)
     {
-        _rules.Add((prefix, new ProcResult(exit, stdout, stderr)));
+        _rules.Add((prefix, run));
         return this;
     }
 
@@ -17,8 +23,9 @@ public class FakeProcessRunner : IProcessRunner
     {
         var call = $"{fileName} {arguments}";
         Calls.Add(call);
-        foreach (var (prefix, result) in _rules)
-            if (call.StartsWith(prefix)) return Task.FromResult(result);
+        Runs.Add((call, workingDir, env, timeoutSeconds));
+        foreach (var (prefix, run) in _rules)
+            if (call.StartsWith(prefix)) return Task.FromResult(run(arguments));
         return Task.FromResult(new ProcResult(1, "", $"no fake rule for: {call}"));
     }
 }

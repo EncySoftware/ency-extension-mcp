@@ -212,10 +212,12 @@ public class LocalPublishTools
 
     [McpServerTool(Name = "check_package"), Description(
         "Check a ready .nupkg before publishing, without signing in or uploading anything: the marker " +
-        "tag the catalogue needs, the manifest and assembly the store requires, the category tag, " +
+        "tag the catalogue needs, the manifest and assembly the store requires, whether the manifest " +
+        "finds its dll once ENCY's store installer has laid the package out (a manifest packed under " +
+        "contentFiles/ does not, and the extension never registers), the category tag, " +
         "screenshots, readme, icon, whether the SDK it was built against has shipped in a released " +
         "ENCY, and the Schedule A declaration the store asks of every submission. publish_package " +
-        "runs the same checks and refuses on the ones the store would refuse too. " +
+        "runs the same checks and refuses on the ones that would stop the publish or the install. " +
         "For a source folder use check_extension instead.")]
     public async Task<string> CheckPackage(
         [Description("A .nupkg file, or the folder holding it (the newest one is taken). Default: current directory")] string? path = null)

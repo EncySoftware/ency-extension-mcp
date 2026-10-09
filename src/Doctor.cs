@@ -23,7 +23,8 @@ public static class Doctor
 
         var dotnet = await proc.Run("dotnet", "--version");
         sb.AppendLine(dotnet.Ok ? $"dotnet:   SDK {dotnet.StdOut.Trim()}"
-                                : "dotnet:   NOT FOUND — install the .NET 8 SDK from https://dot.net (every route builds with it)");
+                                : "dotnet:   NOT FOUND — install the .NET 8 SDK from https://dot.net (every route builds with it; "
+                                  + "connect_to_store packs your project, so it also needs the SDK the project targets)");
 
         var git = await proc.Run("git", "--version");
         sb.AppendLine(git.Ok ? $"git:      {git.StdOut.Trim()}"

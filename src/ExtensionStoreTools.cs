@@ -162,7 +162,9 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         "builds, packs and publishes. The project under src/ need not come from the template: a missing " +
         "package.info.json is written from the csproj and the store's marker tag added, committed " +
         "before the tag. New extensions land hidden until a store moderator approves. " +
-        "Requires a clean working tree unless commitAll is true.")]
+        "Requires a clean working tree unless commitAll is true. For a repository whose project is " +
+        "not under src/ and is packed with `dotnet pack` (not made from the template), call " +
+        "connect_to_store first: it adds a workflow of its own that a version tag starts.")]
     public async Task<string> PublishExtension(
         [Description("Version to publish, semver: 1.2.3. Leave empty for the next patch after the "
                      + "latest tag (0.1.0 for a repo that has never been released)")] string? version = null,
@@ -206,7 +208,8 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         var project = ProjectLayout.Locate(dir, out var layoutError);
         if (layoutError != null) return "ERROR: " + layoutError;
         if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
-            return $"ERROR: the project is at {project.Dir}, but the publish workflow builds src/ — move it under src/ "
+            return $"ERROR: the project is at {project.Dir}, but the publish workflow builds src/ — move it under src/, "
+                 + "or let connect_to_store give this repository a workflow that packs the project where it is "
                  + "(or publish this build with publish_package, which takes any folder).";
         var adopted = new List<string>();
         if (project != null) ProjectLayout.Adopt(project, adopted);

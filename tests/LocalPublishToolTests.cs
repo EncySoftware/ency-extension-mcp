@@ -75,6 +75,28 @@ public class LocalPublishToolTests
         Assert.Empty(store.StagedNupkgs);
     }
 
+    /**
+     * The store takes a package whose manifest sits under contentFiles/, and ENCY installs it as files
+     * that never register — so it is stopped here, before the sign-in and the upload.
+     */
+    [Fact]
+    public async Task A_package_ENCY_would_install_without_registering_is_not_published()
+    {
+        var store = new FakeStoreClient();
+        var auth = new FakeStoreAuth { Token = null };
+        string nupkg = Path.Combine(TempDir(), "EncySoftware.DirectCladdingOperation.1.0.0.nupkg");
+        DcoFixture.WritePackage(nupkg, "contentFiles", version: "1.0.0");
+
+        string answer = await Tools(store, auth).PublishPackage(nupkg);
+
+        Assert.StartsWith("ERROR: the manifest would not find its dll after installation", answer);
+        Assert.Contains("contentFiles/any/any/DirectCladdingOperationExtension.settings.json", answer);
+        Assert.Contains("connect_to_store", answer);
+        Assert.Equal(0, auth.LoginCalls);
+        Assert.Empty(store.StagedNupkgs);
+        Assert.Empty(store.Published);
+    }
+
     /** What only a bare card would have shown is said in the publish result, and the publish goes ahead. */
     [Fact]
     public async Task A_package_without_pictures_is_published_with_a_note()

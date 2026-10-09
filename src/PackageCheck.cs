@@ -9,7 +9,9 @@ public sealed record PackageFacts(
     string? PackageId, string? Version, bool HasMarker, string? CategoryTag,
     bool HasManifest, bool HasAssembly, bool HasReadme, bool HasIcon, int Screenshots, string? SdkVersion,
     /** The Schedule A declaration the manifest carries; null when it carries none. */
-    ScheduleADeclaration? Declaration = null);
+    ScheduleADeclaration? Declaration = null,
+    /** Why the manifest would not find its dll once ENCY has installed the package; null when it would. */
+    string? LayoutProblem = null);
 
 /**
  * The checks a ready package gets before it is published — the counterpart of Preflight, which reads
@@ -45,6 +47,7 @@ public static class PackageCheck
 
         var nuspec = archive.Entries.FirstOrDefault(e =>
             e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && !e.FullName.Contains('/'));
+        string? nuspecSdk = null;
         if (nuspec != null)
         {
             using var s = nuspec.Open();
@@ -61,6 +64,13 @@ public static class PackageCheck
                 else if (tag.StartsWith("category:", StringComparison.OrdinalIgnoreCase) && tag.Length > "category:".Length)
                     category = tag["category:".Length..].ToLowerInvariant();
             }
+            // The store reads the SDK from here too (a package made with `dotnet pack` has no
+            // package.info.json at all), and takes the higher of the two.
+            nuspecSdk = doc.Descendants()
+                .Where(x => x.Name.LocalName == "dependency"
+                            && string.Equals((string?)x.Attribute("id"), ProjectLayout.SdkPackageId, StringComparison.OrdinalIgnoreCase))
+                .Select(x => LowerBound((string?)x.Attribute("version")))
+                .FirstOrDefault(v => v != null);
         }
 
         foreach (var e in archive.Entries)
@@ -84,7 +94,35 @@ public static class PackageCheck
             // screenshots folder that is not called icon or logo.
             else if (image && e.FullName.Contains("screenshots/", StringComparison.OrdinalIgnoreCase)) screenshots++;
         }
-        return new PackageFacts(id, version, marker, category, manifest, assembly, readme, icon, screenshots, sdk, declaration);
+
+        // Where the manifest and the dll land once installed: having both inside is not enough.
+        var names = archive.Entries.Select(e => e.FullName).ToList();
+        string? layout = InstallLayout.ManifestProblem(InstallLayout.Place(names), names, name =>
+        {
+            var e = archive.Entries.FirstOrDefault(x => x.FullName.Replace('\\', '/') == name);
+            if (e == null) return null;
+            using var reader = new StreamReader(e.Open());
+            return reader.ReadToEnd();
+        });
+        return new PackageFacts(id, version, marker, category, manifest, assembly, readme, icon, screenshots,
+                                Higher(sdk, nuspecSdk), declaration, layout);
+    }
+
+    /** `[3.0.15]`, `3.0.15` or `[3.0.15, )` → 3.0.15; null when there is no lower bound to read. */
+    private static string? LowerBound(string? range)
+    {
+        if (string.IsNullOrWhiteSpace(range)) return null;
+        string v = range.Trim().TrimStart('[', '(').Split(',')[0].Trim().TrimEnd(']', ')').Trim();
+        return v.Length > 0 && v.Length <= 64 ? v : null;
+    }
+
+    /** The higher of two SDK versions, as the store takes it; either one when the other is missing or unreadable. */
+    private static string? Higher(string? a, string? b)
+    {
+        Version? na = Numeric(a), nb = Numeric(b);
+        if (na == null) return nb != null ? b : a ?? b;
+        if (nb == null) return a;
+        return nb > na ? b : a;
     }
 
     /** The two things the manifest is read for, in one pass over it. */
@@ -118,6 +156,12 @@ public static class PackageCheck
             found.Add(new Finding(true, "no <Name>.settings.json inside — the store refuses a package without the manifest ENCY registers."));
         if (!f.HasAssembly)
             found.Add(new Finding(true, "no .dll inside — nothing for ENCY to load."));
+        // The store takes such a package, and ENCY installs it as files that never register: both have
+        // a manifest and a dll inside, which is all anybody checked (a package laid out under
+        // contentFiles/, 08.10.2026).
+        if (f.LayoutProblem != null)
+            found.Add(new Finding(true, f.LayoutProblem + " " + InstallLayout.Rule
+                                      + " connect_to_store makes that change in the project's csproj."));
 
         if (f.CategoryTag == null)
             found.Add(new Finding(false, "no `category:<id>` tag, so the card shows under 'other' until one is set — "
@@ -135,7 +179,8 @@ public static class PackageCheck
             found.Add(new Finding(false, "no icon — the card shows a letter tile instead."));
 
         if (f.SdkVersion == null)
-            found.Add(new Finding(false, "package.info.json names no sdkVersion — the store cannot tell which ENCY release the package fits."));
+            found.Add(new Finding(false, "the package names no SDK version — neither `sdkVersion` in package.info.json nor a dependency on "
+                                       + $"{ProjectLayout.SdkPackageId} in the nuspec — so the store cannot tell which ENCY release it fits."));
         else if (Numeric(f.SdkVersion) is { } built && Numeric(recommendedSdk) is { } shipped && built > shipped)
             found.Add(new Finding(false, $"built against SDK {f.SdkVersion}, newer than the newest released ENCY carries ({recommendedSdk}) — "
                                        + "it installs for nobody until that release ships."));

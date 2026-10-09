@@ -167,7 +167,9 @@ public class FolderPublishTools
         "the publish workflow, the assistant's rules in .cursor/rules, AGENTS.md, the NuGet feed, " +
         "Directory.Build.props/targets - and, for a project not made from the template, write " +
         "package.info.json from its csproj with the store's marker tag. The author's own code is " +
-        "neither read nor changed.")]
+        "neither read nor changed. For a project that was NOT made from the template, has a GitHub " +
+        "repository of its own and is packed with `dotnet pack`, use connect_to_store instead: this " +
+        "tool plants the template's workflow and build files, which expect the template's layout.")]
     public async Task<string> UpdateExtension(
         [Description("The extension folder. Default: current directory")] string? folder = null)
     {
@@ -350,7 +352,9 @@ public class FolderPublishTools
         "Never run `gh auth login` for the author instead of this. The folder is the project: the one " +
         "holding <Name>.csproj, package.info.json and <Name>.settings.json, or the whole project with " +
         "src/ inside. Waits for the build by default and returns the result: the version and the card " +
-        "link, or the failing step and its log. The next version is the same call.")]
+        "link, or the failing step and its log. The next version is the same call. A project that " +
+        "already has a GitHub repository of its own and is packed with `dotnet pack` should publish " +
+        "from there: connect_to_store gives that repository a workflow, and no second repository is made.")]
     public async Task<string> PublishFolder(
         [Description("Extension name in PascalCase, e.g. MyToolpathHelper — the store name and the repository name")] string name,
         [Description("The extension folder. Default: current directory")] string? folder = null,
