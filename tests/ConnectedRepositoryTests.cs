@@ -126,6 +126,113 @@ public class ConnectedRepositoryTests : IDisposable
         Assert.Contains("https://store.test/extension/acme-myext", published);
     }
 
+    // ---- no A -> B -> A: each tool sends the author only where the case is taken
+
+    /**
+     * No workflow here publishes: publish_status used to say "did you call publish_extension", whose tag
+     * starts nothing here, after which publish_extension said "call publish_status" — a circle. Now it
+     * names the tools that add a workflow, and connect_to_store does take such a repository.
+     */
+    [Fact]
+    public async Task Publish_status_where_no_workflow_publishes_names_what_adds_one_and_that_route_takes_it()
+    {
+        Project("MyExt.csproj", connected: false);
+        var none = new FakeProcessRunner().On("gh run list", stdout: "[]");
+
+        string answer = await Store(none).PublishStatus(_repo);
+
+        Assert.StartsWith("No publish workflow runs found, and no workflow in this repository publishes to the store", answer);
+        Assert.Contains("connect_to_store", answer);
+        Assert.Contains("update_extension", answer);
+        Assert.DoesNotContain("publish_extension", answer);
+
+        // Followed: connect_to_store takes it (its check pack faked, as a real one would pass).
+        var dotnet = new FakeProcessRunner()
+            .On("dotnet pack", args =>
+            {
+                string output = System.Text.RegularExpressions.Regex.Match(args, "-o \"([^\"]+)\"").Groups[1].Value;
+                DcoFixture.WritePackage(Path.Combine(output, "Acme.MyExt.0.0.0-storecheck.nupkg"), "build");
+                return new ProcResult(0, "", "");
+            })
+            .On("dotnet msbuild", _ =>
+            {
+                string bin = Path.Combine(_repo, "bin", "Release", "net10.0-windows");
+                DcoFixture.WriteBuildOutput(bin);
+                return new ProcResult(0, System.Text.Json.JsonSerializer.Serialize(new { Properties = new { TargetDir = bin } }), "");
+            });
+        string connected = await new ConnectTools(dotnet, new FakeStoreClient { RecommendedSdk = "3.0.15" }, new FakeUpdateCheck(null), _log.Add)
+            .ConnectToStore(_repo);
+        Assert.StartsWith("Connected MyExt.csproj", connected);
+    }
+
+    /** A workflow of the author's own that uses the publish action: followed by its own name, and not via publish_extension. */
+    [Fact]
+    public async Task Publish_status_follows_a_workflow_of_the_authors_own()
+    {
+        Project("MyExt.csproj", connected: false);
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "release.yml"), "on: workflow_dispatch\njobs:\n  p:\n    steps:\n      - uses: EncySoftware/publish-extension-action@v1\n");
+        var none = new FakeProcessRunner().On("gh run list", stdout: "[]");
+
+        string answer = await Store(none).PublishStatus(_repo);
+
+        Assert.Contains(none.Calls, c => c.StartsWith("gh run list --workflow release.yml "));
+        Assert.StartsWith("No run of release.yml found yet — this repository publishes through it", answer);
+        Assert.DoesNotContain("publish_extension", answer);
+    }
+
+    /** The template's workflow keeps its answer: publish_extension's tag starts it. */
+    [Fact]
+    public async Task Publish_status_of_a_template_repository_still_sends_to_publish_extension()
+    {
+        Project("src/MyExt.csproj", connected: false);
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "publish.yml"), ConnectToolTests.TemplatesWorkflow);
+        var none = new FakeProcessRunner().On("gh run list", stdout: "[]");
+
+        string answer = await Store(none).PublishStatus(_repo);
+
+        Assert.Contains(none.Calls, c => c.StartsWith("gh run list --workflow publish.yml "));
+        Assert.Equal("No publish workflow runs found — did you call publish_extension (push a v* tag)?", answer);
+    }
+
+    /**
+     * A project outside src/ in a repository that publishes through a workflow of the author's own: not
+     * sent to connect_to_store, which has nothing to connect there, nor told to move into src/.
+     */
+    [Fact]
+    public async Task Publish_extension_outside_src_with_a_workflow_of_the_authors_own_names_that_workflow()
+    {
+        Project("MyExt.csproj", connected: false);
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "release.yml"), "on: push\njobs:\n  p:\n    steps:\n      - uses: EncySoftware/publish-extension-action@v1\n");
+        var proc = Push();
+
+        string answer = await Store(proc).PublishExtension("1.0.0", repoDir: _repo);
+
+        Assert.StartsWith($"ERROR: the project is at {_repo}, and this repository publishes through .github/workflows/release.yml, "
+                          + "not through the template's workflow", answer);
+        Assert.Contains("Publish by starting release.yml the way it runs", answer);
+        Assert.DoesNotContain("connect_to_store", answer);
+        Assert.DoesNotContain(proc.Calls, c => c.StartsWith("git tag") || c.StartsWith("git push"));
+    }
+
+    /** Where publish_extension does tag, it follows the run of the workflow that publishes — the one publish_status follows. */
+    [Fact]
+    public async Task Publish_extension_follows_the_workflow_that_publishes()
+    {
+        Project("src/MyExt.csproj", connected: false);
+        File.WriteAllText(Path.Combine(_repo, "src", "package.info.json"), "{\n  \"packageId\": \"MyExt\",\n  \"tags\": \"ency-extension\",\n  \"category\": \"analyzer\"\n}\n");
+        Directory.CreateDirectory(Workflows);
+        File.WriteAllText(Path.Combine(Workflows, "release.yml"), "on: push\njobs:\n  p:\n    steps:\n      - uses: EncySoftware/publish-extension-action@v1\n");
+        var proc = Push();
+
+        string answer = await Store(proc).PublishExtension("1.0.0", repoDir: _repo);
+
+        Assert.StartsWith("Pushed v1.0.0", answer);
+        Assert.Contains(proc.Calls, c => c.StartsWith("gh run list --workflow release.yml "));
+    }
+
     // ---- the template's route refuses
 
     [Fact]

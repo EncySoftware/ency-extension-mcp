@@ -182,6 +182,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         // follow is that workflow's. Before, this tool knew only src/ and publish.yml, refused a connected
         // project at the root and lost the run of any other (review, 09.10.2026).
         string? connected = StoreWorkflow.Find(dir);
+        string? publishing = PublishingWorkflow(dir, connected);
         if (connected != null && !string.IsNullOrWhiteSpace(category))
             return $"ERROR: this repository publishes through {StoreWorkflow.RelativePath}, which packs the csproj as it is, so "
                  + $"the category is not a field this tool writes: add the tag category:{category.Trim().ToLowerInvariant()} to "
@@ -224,9 +225,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
             project = ProjectLayout.Locate(dir, out var layoutError);
             if (layoutError != null) return "ERROR: " + layoutError;
             if (project != null && !project.Dir.Equals(Path.Combine(dir, "src"), StringComparison.OrdinalIgnoreCase))
-                return $"ERROR: the project is at {project.Dir}, but the publish workflow builds src/ — move it under src/, "
-                     + "or let connect_to_store give this repository a workflow that packs the project where it is "
-                     + "(or publish this build with publish_package, which takes any folder).";
+                return "ERROR: " + OutsideSrc(project.Dir, dir, publishing);
         }
         var adopted = new List<string>();
         if (project != null) ProjectLayout.Adopt(project, adopted);
@@ -283,7 +282,7 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         if (!pushTag.Ok) return $"ERROR: tag push failed:\n{pushTag.StdErr.Trim()}";
 
         await Task.Delay(4000); // give Actions a moment to register the run
-        var run = await LatestRun(dir, connected != null ? StoreWorkflow.FileName : WorkflowFile);
+        var run = await LatestRun(dir, publishing != null ? Path.GetFileName(publishing) : WorkflowFile);
 
         return await WithUpdateNote($"""
             Pushed {tag} — GitHub Actions is building and publishing.{(adoptNote != null ? " " + adoptNote + "." : "")}{(categoryNote != null ? " " + categoryNote + "." : "")}
@@ -301,6 +300,39 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
         return note == null ? text : text.TrimEnd() + "\n\n" + note;
     }
 
+    /**
+     * The workflow file that publishes this repository: connect_to_store's publish_store.yml, else the
+     * one that uses the publish action (the template's publish.yml, or one of the author's own); null
+     * when none does. publish_extension and publish_status follow the same one.
+     */
+    private static string? PublishingWorkflow(string dir, string? connected)
+    {
+        if (connected != null) return connected;
+        string root = GitRepository.Root(dir) ?? dir;
+        return StoreWorkflow.OtherStoreWorkflow(root) is { } other ? Path.Combine(root, ".github", "workflows", other) : null;
+    }
+
+    /**
+     * Why a project outside src/ is not this tool's to tag, with the route that does take it. Never one
+     * that sends it back here: connect_to_store refuses a repository that publishes already, so it is
+     * named only where no workflow publishes, or once the template's is deleted (review, 09.10.2026).
+     */
+    private static string OutsideSrc(string projectDir, string dir, string? publishing)
+    {
+        if (publishing == null)
+            return $"the project is at {projectDir}, but the publish workflow builds src/ — move it under src/, "
+                 + "or let connect_to_store give this repository a workflow that packs the project where it is "
+                 + "(or publish this build with publish_package, which takes any folder).";
+        string file = Path.GetFileName(publishing);
+        if (StoreWorkflow.IsTemplates(publishing))
+            return $"the project is at {projectDir}, but the template's workflow (.github/workflows/{file}) builds src/ — move the "
+                 + $"project under src/; or, to publish it where it is, delete {file} and let connect_to_store give this repository "
+                 + "a workflow that packs it there (or publish this build with publish_package, which takes any folder).";
+        return $"the project is at {projectDir}, and this repository publishes through .github/workflows/{file}, not through the "
+             + "template's workflow, which builds src/ and is the one this tool tags for. Publish by starting "
+             + $"{file} the way it runs: a tag push, or Actions -> Run workflow on GitHub.";
+    }
+
     /** The note for a manifest that names no category (or the default one); null when it does. */
     public static string? UnsortedNote(string? manifestCategory) =>
         string.IsNullOrWhiteSpace(manifestCategory) || manifestCategory.Trim().Equals("other", StringComparison.OrdinalIgnoreCase)
@@ -312,19 +344,30 @@ public class ExtensionStoreTools(IProcessRunner proc, IStoreClient store, IStore
 
     [McpServerTool(Name = "publish_status"), Description(
         "Status of the latest publish: the GitHub Actions run (with the failure log when red) and, " +
-        "once published, the store card link and its moderation state. Follows publish.yml in a " +
-        "repository made from the template, and publish_store.yml in one connected with connect_to_store.")]
+        "once published, the store card link and its moderation state. Follows the workflow that publishes " +
+        "the repository: publish_store.yml in one connected with connect_to_store, publish.yml in one made " +
+        "from the template, or the author's own workflow that uses the store's publish action.")]
     public async Task<string> PublishStatus(
         [Description("Extension repo directory. Default: current directory")] string? repoDir = null)
     {
         var dir = Path.GetFullPath(repoDir ?? ".");
         string? connected = StoreWorkflow.Find(dir);
-        var run = await LatestRun(dir, connected != null ? StoreWorkflow.FileName : WorkflowFile);
+        string? publishing = PublishingWorkflow(dir, connected);
+        var run = await LatestRun(dir, publishing != null ? Path.GetFileName(publishing) : WorkflowFile);
+        // Sent to publish_extension only where its tag starts the run to follow: in a repository where no
+        // workflow publishes, that sent the author round in a circle (review, 09.10.2026).
         if (run == null)
             return connected != null
                 ? $"No run of {StoreWorkflow.FileName} found yet — push a v* tag (publish_extension does it), or start it on "
                   + "GitHub: Actions -> \"Publish to ENCY Extension Store\" -> Run workflow."
-                : "No publish workflow runs found — did you call publish_extension (push a v* tag)?";
+                : publishing == null
+                ? "No publish workflow runs found, and no workflow in this repository publishes to the store (none uses "
+                  + "publish-extension-action), so a v* tag starts nothing. A project packed with `dotnet pack` gets one from "
+                  + "connect_to_store; a project in the template's src/ layout gets the template's back from update_extension."
+                : StoreWorkflow.IsTemplates(publishing)
+                ? "No publish workflow runs found — did you call publish_extension (push a v* tag)?"
+                : $"No run of {Path.GetFileName(publishing)} found yet — this repository publishes through it: start it the way "
+                  + "it runs, a tag push or Actions -> Run workflow on GitHub.";
 
         var sb = new StringBuilder();
         var r = run.Value;

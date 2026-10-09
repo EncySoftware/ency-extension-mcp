@@ -95,9 +95,12 @@ public static class DcoFixture
         : layout == "contentFiles" ? "contentFiles/any/any/" + (path.StartsWith("SmartHintImages/") ? "SmartHintImages/" + path : path)
         : "build/" + path;
 
-    /** A package of the project as `dotnet pack` makes it — "build" (fixed) or "contentFiles" (as it was). */
+    /**
+     * A package of the project as `dotnet pack` makes it — "build" (fixed) or "contentFiles" (as it was) —
+     * plus any extra entries (a package.info.json, say).
+     */
     public static void WritePackage(string file, string layout, string version = "0.0.0-storecheck", string tags = "ency-extension operationsolver",
-                                    string sdk = "3.0.15")
+                                    string sdk = "3.0.15", params (string Name, string Text)[] extra)
     {
         using var zip = new ZipArchive(File.Create(file), ZipArchiveMode.Create);
         Add(zip, "EncySoftware.DirectCladdingOperation.nuspec", $"""
@@ -123,6 +126,7 @@ public static class DcoFixture
         Add(zip, "README.md", "# Direct Cladding");
         Add(zip, "icon.png", "icon");
         foreach (var (path, text) in Runtime) Add(zip, EntryFor(path, layout), text);
+        foreach (var (name, text) in extra) Add(zip, name, text);
     }
 
     /** The Release build output the package came from. */

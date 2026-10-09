@@ -9,7 +9,7 @@ MCP server for the "write an ENCY extension in Cursor, never copy a file by hand
 | `publish_folder` | Publishes a local folder with no git and no gh: the store makes the repository, commits the folder, builds and publishes; the author only signs in and approves the store app in the browser. |
 | `publish_folder_status` | The latest publish_folder result: building, published (version + card), or failed (step + log). |
 | `publish_package` | Publishes what you built on THIS machine — a ready `.nupkg` or a build-output folder the store packs. No git, no GitHub, no repository; the card is yours. |
-| `connect_to_store` | For a project NOT made from the template, in a GitHub repository of its own and packed with `dotnet pack`: moves what the csproj packs where ENCY's store installer does not look (`contentFiles/`, or a folder named twice) to `build\`, adds `.github/workflows/publish_store.yml`, and proves both with a real pack laid out the way ENCY installs it. A version tag then publishes — `publish_extension` pushes it, `publish_status` follows the run. |
+| `connect_to_store` | For a project NOT made from the template, in a GitHub repository of its own and packed with `dotnet pack`: moves what the csproj packs under `contentFiles/` (which the store installer in ENCY keeps as a subfolder away from the dll, so the extension would install and not register) or into a folder named twice to `build\`, adds `.github/workflows/publish_store.yml`, and proves both with a real pack laid out the way the store tab in ENCY installs it. A version tag then publishes — `publish_extension` pushes it, `publish_status` follows the run. |
 | `create_extension_repo` | GitHub repo from the ENCY template → waits for the copy → clones → renames the extension → sets the publish secret → pushes. |
 | `publish_extension` | Tags `vX.Y.Z` and pushes — GitHub Actions builds, packs and publishes to the [ENCY Extension Store](https://apps.encycam.com). |
 | `publish_status` | Follows the run (failure log tail when red) and reports the store card + moderation state when green. |
@@ -85,9 +85,10 @@ Today that first publication comes back with its card link; a store that reviews
 that, with no sign-in and nothing uploaded: the `ency-extension` tag the catalogue needs, the
 manifest and assembly the store requires, whether the manifest finds its dll once ENCY's store
 installer has laid the package out (see below — a manifest packed under `contentFiles/` does not),
-the `category:` tag, screenshots, readme, icon, and whether the SDK it was built against (from
-`package.info.json` or the nuspec's dependency on `EncySoftware.CAMAPI.SDK.Net`) has shipped in a
-released ENCY. `publish_package` runs the same checks first, so a package the store would refuse, or
+the `category:` tag, screenshots, readme, icon, and whether the SDK it was built against has shipped
+in a released ENCY. The SDK is read the way the store reads it: `package.info.json`'s and the nuspec's
+dependency on `EncySoftware.CAMAPI.SDK.Net`, the higher of the two by SemVer, where a release ranks
+above its own prerelease. `publish_package` runs the same checks first, so a package the store would refuse, or
 ENCY would install without registering, never opens the browser; the rest come back as notes under
 the result. For a source folder the counterpart is `check_extension`.
 
@@ -159,42 +160,82 @@ ency-extension-mcp connect-to-store C:\src\MyExtension --csproj project/main/MyE
 ```
 
 - It finds the extension's csproj: the one that references `EncySoftware.CAMAPI.SDK.Net` or packs a
-  `*.settings.json`. With several, it lists them and asks for `csproj`.
-- It moves what the csproj packs under `contentFiles/` to `build\`. ENCY's store installer merges
+  `*.settings.json`. With several, it lists them and asks for `csproj`. That search reads the csproj
+  alone, so it misses a project whose SDK reference sits in `Directory.Build.props` or
+  `Directory.Packages.props`; pointed at that project's folder, it takes the one csproj there, and
+  otherwise it asks for `csproj`.
+- It moves what the csproj packs under `contentFiles/` to `build\`. The store installer in ENCY merges
   `build/`, `content/` and `lib/<tfm>/` into one folder next to the dll and keeps every other folder
-  as it is, so a manifest packed under `contentFiles/any/any/` looks for its dll in that folder and the
-  extension installs without ever registering. The new value is `build\` plus the file's folder in
+  as it is, so a manifest packed under `contentFiles/any/any/` looks for its dll in that subfolder and
+  the extension installs without ever registering. The new value is `build\` plus the file's folder in
   the Release build, minus the folder NuGet appends by itself (`<None Update="Images\*.png">` gets
   plain `build\`, or the pictures land in `Images\Images\`); a `build\` or `content\` value that names
   that folder again is corrected the same way. An item the build does not copy to its output has no
   place in the build to go by, so it keeps the folder its own value gave it under `contentFiles/`, and
   the answer marks it with `!` for the author to check. Only the value between the quotes changes: the
   byte order mark, the line endings and every other line stay as they were. An item a text edit cannot
-  put right is listed instead, with what it needs.
+  put right is listed instead, with what it needs — among them a packed item whose `PackagePath` is
+  written in another letter case: NuGet reads the name as written and ignores any other spelling (a
+  real pack put such files under `content/` and `contentFiles/` both).
 - It adds `.github/workflows/publish_store.yml` when the repository has a GitHub remote (a mirror will
   do), never overwriting one and never touching the other workflows: a `vX.Y.Z` tag, or **Actions →
   Run workflow** with a version (and **dry run** to have the store only check the package), packs the
   project on GitHub — Release, nuget.org and the ENCY Nexus as sources (some SDK versions are only
   there), NU1603 as an error — and publishes the `.nupkg` with the run's own GitHub token. No secrets.
   One repository publishes one extension: a `publish_store.yml` already there that packs another
-  csproj, or names none, stops the call with nothing changed. With no GitHub remote, or outside git, no
-  workflow is added (it would never run), but the csproj is fixed and checked all the same, and the
-  answer gives the `dotnet pack` line and `publish_package` to publish from this machine.
+  csproj, or names none, stops the call with nothing changed. So does a repository that publishes
+  through another workflow already (one that uses the store's publish action): with the template's
+  `publish.yml` and the project in `src/`, the answer points at `publish_extension` and
+  `update_extension`; with the project outside `src/`, at moving it there or deleting `publish.yml`;
+  with a workflow of the author's own, there is nothing to connect. With no GitHub remote, or outside
+  git, no workflow is added (it would never run), but the csproj is fixed and checked all the same,
+  and the answer gives the `dotnet pack` line and `publish_package` to publish from this machine.
 - It proves both with a real `dotnet pack` on this machine (so it needs the .NET SDK the project
-  targets), laid out the way ENCY installs it and compared with the Release build: the manifest has
-  to find its dll, every file has to land where the build has it, nothing under `contentFiles/`, no
-  two files on one path. When that fails, both changes are taken back and the answer says what would
-  land where. What the store would still refuse at the first publish is named in the answer: no
-  `ency-extension` tag, a prerelease SDK, or an SDK newer than the line the store publishes under.
+  targets), laid out the way the store tab in ENCY installs it and compared with the Release build:
+  the manifest has to find its dll, every file has to land where the build has it, nothing under
+  `contentFiles/`, no two files on one path. The check is an ordinary Release build and leaves `bin/`
+  and `obj/` like any build. When it fails, both changes are taken back — the answer says the csproj
+  and the workflow were left as they were, and what would land where; a csproj that cannot be written
+  back has its original saved to a file the answer names. It restores from the workflow's two sources,
+  but through this machine's package cache, while the run on GitHub starts cold — so a package the
+  cache got from another source is named; a source that does not answer (NU1301) is named in plain words.
+  What the store would still refuse at the first publish is named in the answer: no `ency-extension`
+  tag, a prerelease SDK, or an SDK newer than the line the store publishes under; the package check's
+  notes on the card (no screenshots, readme or icon) follow the check.
 
-It writes no `package.info.json` and no Schedule A answer. The answer ends with what only the author
-can do, once, in the browser — sign in at [apps.encycam.com](https://apps.encycam.com), the developer
-registration and the terms on the Publish page, **Sign in with GitHub** in the profile, owning the
-card — and with how to publish. The first publish binds the repository to the extension, so start it
-as the card's owner with that GitHub account linked; from then on every run from the repository is
-credited to that owner, whoever starts it (to bind it in advance: **Connect** on the account page, or
+The check models the store tab in ENCY, which lays out what it installs from the store. Where ENCY's
+NuGet-based installer (Helpers.Nuget) decides the layout instead, it copies only what the package's
+`build/<id>.targets` lists, and a plain `dotnet pack` package has no such file — there it installs as
+a bare dll.
+
+It writes no `package.info.json` and no Schedule A answer — that answer is the author's to give. The
+answer says where it goes: a `package.info.json` next to the csproj holding `"reservedDomains": []`
+(or one entry per area), packed with
+`<None Include="package.info.json" Pack="true" PackagePath="build\" CopyToOutputDirectory="PreserveNewest" />`;
+the store reads the first `package.info.json` in the package.
+
+The answer ends with what only the author can do, once, in the browser — sign in at
+[apps.encycam.com](https://apps.encycam.com), the developer registration and the terms on the Publish
+page, **Sign in with GitHub** in the profile, owning the card (one someone else owns: ask that owner
+or the store's moderators to hand it over) — and with how to publish, including what the first run
+meets: GitHub offers **Run workflow** only once `publish_store.yml` is on the default branch; a new
+card stays out of the catalogue until a moderator approves it, while new versions of an approved card
+appear at once; the workflow passes no category, so a new card lands in `other` unless
+`<PackageTags>` carries `category:<id>` (ids at
+[apps.encycam.com/api/categories](https://apps.encycam.com/api/categories)), and a card that has a
+category keeps it; and the other workflows a version tag starts, read from their `on:` blocks. The
+first publish binds the repository to the extension, so start it as the card's owner with that GitHub
+account linked; from then on every run from the repository is credited to that owner, whoever starts
+it (to bind it in advance: **Connect** on the account page, or
 `ency-extension-mcp claim <PackageId> <owner/repo>`). After that `publish_extension` pushes the
 version tag, and `publish_status` follows the run of `publish_store.yml` to the store card.
+
+`publish_extension` and `publish_status` follow the workflow that publishes a repository —
+`publish_store.yml`, the template's `publish.yml`, or one of the author's own that uses the store's
+publish action. Where none does, `publish_status` says which tool adds one instead of sending the
+author to `publish_extension`, whose tag would start nothing; where the template's `publish.yml`
+builds `src/` and the project is elsewhere, `publish_extension` says to move it into `src/` or to
+delete `publish.yml` and connect the repository.
 
 A project made from the template, or brought into its `src/` layout, publishes the template's way:
 `publish_folder` and `publish_extension` find the csproj under `src/`, `publish_package` finds it
