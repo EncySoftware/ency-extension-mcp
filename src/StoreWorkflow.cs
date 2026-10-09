@@ -120,6 +120,19 @@ public static class StoreWorkflow
             .FirstOrDefault(f => Read(f)?.Contains("publish-extension-action", StringComparison.OrdinalIgnoreCase) == true)
             is { } file ? Path.GetFileName(file) : null;
 
+    private static readonly Regex BuildsSrc = new(
+        @"\bdotnet\s+(?:build|pack)\s+[""']?(?:\./)?src(?:[""'/\s]|$)|^\s*folder:\s*[""']?(?:\./)?src/",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /**
+     * Whether a workflow is the template's own: publish.yml, building src/ — the one publish_extension
+     * tags for and update_extension refreshes. Renamed or hand-made, it is the repository's own, and the
+     * template's files would only add a second publish beside it.
+     */
+    public static bool IsTemplates(string workflowFile) =>
+        Path.GetFileName(workflowFile).Equals("publish.yml", StringComparison.OrdinalIgnoreCase)
+        && Read(workflowFile) is { } yaml && BuildsSrc.IsMatch(yaml);
+
     /** The workflow files of a folder other than this one, in name order. */
     public static IEnumerable<string> Workflows(string dir) =>
         !Directory.Exists(dir) ? Enumerable.Empty<string>()
@@ -133,6 +146,309 @@ public static class StoreWorkflow
         string p = path.Trim().Replace('\\', '/');
         while (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
         return p;
+    }
+
+    // ---- what starts a workflow: its `on:` block, read the way GitHub reads it
+
+    /** Version tags a push of which publishes; a workflow is said to start on a tag push when any of them starts it. */
+    private static readonly string[] VersionTags = { "v0.1.0", "v1.0.0", "v1.2.3", "v10.20.30" };
+
+    /**
+     * Whether pushing a version tag (vX.Y.Z) starts this workflow, from the structure of its `on:` block
+     * — a string, a list or a map — never from a `tags:` line anywhere in the file (a docker step's
+     * `with: tags:` is one). GitHub's rule: on.push with tags runs for a tag they match, with
+     * tags-ignore for a tag they do not; on.push with none of branches, branches-ignore, tags and
+     * tags-ignore runs for every tag (path filters are not applied to tag pushes); on.push with only
+     * branches or branches-ignore never runs for a tag. `create` runs for every new tag. False when
+     * the block cannot be read: then nothing is claimed.
+     */
+    public static bool StartsOnVersionTag(string yaml)
+    {
+        // A reader of a subset: whatever it cannot read is no claim, never a failed answer.
+        try { return StartsOnVersionTag(Trigger.On(yaml)); }
+        catch (Exception) { return false; }
+    }
+
+    private static bool StartsOnVersionTag(Trigger.Node? on)
+    {
+        if (on == null) return false;
+        var events = new Dictionary<string, Trigger.Node?>(StringComparer.Ordinal);
+        switch (on)
+        {
+            case Trigger.Scalar s when s.Value != null: events[s.Value] = null; break;
+            case Trigger.Seq q:
+                foreach (var item in q.Items) if (item is Trigger.Scalar { Value: { } name }) events[name] = null;
+                break;
+            case Trigger.Map m:
+                foreach (var (key, value) in m.Entries) events[key] = value;
+                break;
+        }
+        if (events.ContainsKey("create")) return true;
+        if (!events.TryGetValue("push", out var push)) return false;
+        if (push is null or Trigger.Scalar { Value: null }) return true;
+        if (push is not Trigger.Map filters) return false;
+
+        var keys = new Dictionary<string, Trigger.Node?>(StringComparer.Ordinal);
+        foreach (var (key, value) in filters.Entries) keys[key] = value;
+        if (keys.TryGetValue("tags", out var tags))
+            return Patterns(tags) is { } p && VersionTags.Any(t => FilterMatches(p, t));
+        if (keys.TryGetValue("tags-ignore", out var ignore))
+            return Patterns(ignore) is { } p && VersionTags.Any(t => !FilterMatches(p, t));
+        return !keys.ContainsKey("branches") && !keys.ContainsKey("branches-ignore");
+    }
+
+    private static List<string>? Patterns(Trigger.Node? node) => node switch
+    {
+        Trigger.Scalar { Value: { } one } => new List<string> { one },
+        Trigger.Seq q when q.Items.All(i => i is Trigger.Scalar { Value: not null }) =>
+            q.Items.Select(i => ((Trigger.Scalar)i).Value!).ToList(),
+        _ => null,
+    };
+
+    /**
+     * GitHub's filter patterns, in order: a name is in when the last pattern that matches it is a
+     * positive one (`!` negates). `*` stops at '/', `**` does not, `?` and `+` act on the character
+     * before them, `[]` is a class, `\` escapes.
+     */
+    internal static bool FilterMatches(IReadOnlyList<string> patterns, string name)
+    {
+        bool matched = false;
+        foreach (var raw in patterns)
+        {
+            bool negate = raw.StartsWith('!');
+            if (FilterRegex(negate ? raw[1..] : raw) is { } r && r.IsMatch(name)) matched = !negate;
+        }
+        return matched;
+    }
+
+    private static Regex? FilterRegex(string pattern)
+    {
+        var sb = new System.Text.StringBuilder("^");
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            if (c == '\\' && i + 1 < pattern.Length) sb.Append(Regex.Escape(pattern[++i].ToString()));
+            else if (c == '*' && i + 1 < pattern.Length && pattern[i + 1] == '*') { sb.Append(".*"); i++; }
+            else if (c == '*') sb.Append("[^/]*");
+            else if ((c == '?' || c == '+') && sb.Length > 1) sb.Append(c);
+            else if (c == '[' && pattern.IndexOf(']', i + 1) is var close && close > i + 1)
+            {
+                sb.Append('[').Append(pattern[(i + 1)..close].Replace("\\", "\\\\")).Append(']');
+                i = close;
+            }
+            else sb.Append(Regex.Escape(c.ToString()));
+        }
+        try { return new Regex(sb.Append('$').ToString(), RegexOptions.CultureInvariant); }
+        catch (ArgumentException) { return null; }   // `*+` and the like: nothing a version tag is matched by
+    }
+
+    /**
+     * Just enough YAML to read a workflow's `on:` value: block maps and lists by indentation, flow
+     * `[...]` and `{...}`, plain and quoted scalars, comments. Anchors, tags and block scalars are not
+     * read — an `on:` block does not use them; a FormatException says this one did.
+     */
+    private static class Trigger
+    {
+        public abstract record Node;
+        public sealed record Scalar(string? Value) : Node;
+        public sealed record Seq(List<Node> Items) : Node;
+        public sealed record Map(List<(string Key, Node? Value)> Entries) : Node;
+
+        private sealed record Line(int Indent, string Text);
+
+        /** The value of the top-level `on` key; null when the file has none. */
+        public static Node? On(string yaml)
+        {
+            var lines = new List<Line>();
+            foreach (var raw in yaml.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                string text = StripComment(raw).TrimEnd();
+                if (text.Trim().Length == 0 || text.Trim() is "---" or "...") continue;
+                int indent = text.Length - text.TrimStart(' ').Length;
+                lines.Add(new Line(indent, text[indent..]));
+            }
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (lines[i].Indent != 0 || SplitKey(lines[i].Text) is not { } kv || kv.Key != "on") continue;
+                int next = i + 1;
+                return ValueOf(kv.Tail, lines, ref next, 0);
+            }
+            return null;
+        }
+
+        /** The value after `key:` — inline, or the block below it (a list may sit at the key's own indent). */
+        private static Node? ValueOf(string rest, List<Line> lines, ref int i, int keyIndent)
+        {
+            if (rest.Length > 0)
+            {
+                // A plain scalar in block context keeps its brackets and commas: v[0-9]+.[0-9]+ is one pattern.
+                if (rest[0] is not ('[' or '{' or '"' or '\''))
+                    return new Scalar(rest is "~" or "null" or "Null" or "NULL" ? null : rest);
+                // A flow collection may run over several lines.
+                string flow = rest;
+                if (flow[0] is '[' or '{')
+                    while (Depth(flow) > 0 && i < lines.Count) flow += " " + lines[i++].Text;
+                int at = 0;
+                var node = Flow(flow, ref at);
+                if (flow[at..].Trim().Length > 0) throw new FormatException("text after a value: " + flow);
+                return node;
+            }
+            if (i < lines.Count && (lines[i].Indent > keyIndent || (lines[i].Indent == keyIndent && IsItem(lines[i].Text))))
+                return Block(lines, ref i, lines[i].Indent);
+            return null;
+        }
+
+        private static Node Block(List<Line> lines, ref int i, int indent)
+        {
+            if (IsItem(lines[i].Text))
+            {
+                var items = new List<Node>();
+                while (i < lines.Count && lines[i].Indent == indent && IsItem(lines[i].Text))
+                {
+                    string item = lines[i].Text[1..].TrimStart(' ');
+                    int inner = indent + (lines[i].Text.Length - item.Length);
+                    i++;
+                    if (item.Length == 0)
+                        items.Add(i < lines.Count && lines[i].Indent > indent ? Block(lines, ref i, lines[i].Indent) : new Scalar(null));
+                    else if (item[0] is not ('[' or '{' or '"' or '\'') && SplitKey(item) is { } kv)
+                    {
+                        // `- key: value` opens a map whose further keys sit under the first one.
+                        lines.Insert(i, new Line(inner, item));
+                        items.Add(Block(lines, ref i, inner));
+                    }
+                    else items.Add(ValueOf(item, lines, ref i, indent) ?? new Scalar(null));
+                }
+                return new Seq(items);
+            }
+            var entries = new List<(string, Node?)>();
+            while (i < lines.Count && lines[i].Indent == indent && !IsItem(lines[i].Text))
+            {
+                var kv = SplitKey(lines[i].Text) ?? throw new FormatException("not a key: " + lines[i].Text);
+                i++;
+                entries.Add((kv.Key, ValueOf(kv.Tail, lines, ref i, indent)));
+            }
+            if (i < lines.Count && lines[i].Indent > indent) throw new FormatException("unexpected indent: " + lines[i].Text);
+            return new Map(entries);
+        }
+
+        private static bool IsItem(string text) => text == "-" || text.StartsWith("- ", StringComparison.Ordinal);
+
+        /** `key: rest` with the key unquoted; null when the line is not a key. */
+        private static (string Key, string Tail)? SplitKey(string text)
+        {
+            int at = 0;
+            string key;
+            if (text.Length > 0 && text[0] is '"' or '\'')
+            {
+                key = Quoted(text, ref at);
+                while (at < text.Length && text[at] == ' ') at++;
+                if (at >= text.Length || text[at] != ':') return null;
+            }
+            else
+            {
+                at = IndexOfColon(text);
+                if (at < 0) return null;
+                key = text[..at].Trim();
+            }
+            if (at + 1 < text.Length && text[at + 1] != ' ') return null;
+            return (key, text[(at + 1)..].Trim());
+        }
+
+        /** The first ': ' (or a ':' ending the text) outside brackets — where a plain key ends. */
+        private static int IndexOfColon(string text)
+        {
+            int depth = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (text[i] is '[' or '{') depth++;
+                else if (text[i] is ']' or '}') depth--;
+                else if (text[i] == ':' && depth == 0 && (i + 1 == text.Length || text[i + 1] == ' ')) return i;
+            }
+            return -1;
+        }
+
+        private static Node Flow(string s, ref int at)
+        {
+            while (at < s.Length && s[at] == ' ') at++;
+            if (at >= s.Length) return new Scalar(null);
+            char c = s[at];
+            if (c is '[' or '{')
+            {
+                at++;
+                var items = new List<Node>();
+                var entries = new List<(string, Node?)>();
+                while (true)
+                {
+                    while (at < s.Length && s[at] == ' ') at++;
+                    if (at >= s.Length) throw new FormatException("unclosed " + c);
+                    if (s[at] is ']' or '}') { at++; break; }
+                    if (c == '{')
+                    {
+                        var key = Flow(s, ref at) as Scalar;
+                        while (at < s.Length && s[at] == ' ') at++;
+                        Node? value = null;
+                        if (at < s.Length && s[at] == ':') { at++; value = Flow(s, ref at); }
+                        entries.Add((key?.Value ?? "", value));
+                    }
+                    else items.Add(Flow(s, ref at));
+                    while (at < s.Length && s[at] == ' ') at++;
+                    if (at < s.Length && s[at] == ',') at++;
+                }
+                return c == '[' ? new Seq(items) : new Map(entries);
+            }
+            if (c is '"' or '\'') return new Scalar(Quoted(s, ref at));
+            int start = at;
+            while (at < s.Length && s[at] is not (',' or ']' or '}') && !(s[at] == ':' && (at + 1 == s.Length || s[at + 1] == ' '))) at++;
+            string plain = s[start..at].Trim();
+            return new Scalar(plain is "" or "~" or "null" or "Null" or "NULL" ? null : plain);
+        }
+
+        private static string Quoted(string s, ref int at)
+        {
+            char q = s[at++];
+            var sb = new System.Text.StringBuilder();
+            while (at < s.Length)
+            {
+                char c = s[at++];
+                if (q == '\'' && c == '\'' && at < s.Length && s[at] == '\'') { sb.Append('\''); at++; }
+                else if (c == q) return sb.ToString();
+                else if (q == '"' && c == '\\' && at < s.Length) sb.Append(s[at++]);
+                else sb.Append(c);
+            }
+            throw new FormatException("unclosed quote");
+        }
+
+        /** The text up to a comment: '#' at the start or after a space, outside quotes. */
+        private static string StripComment(string line)
+        {
+            char quote = '\0';
+            for (int i = 0; i < line.Length; i++)
+            {
+                char c = line[i];
+                if (quote != '\0')
+                {
+                    if (c == quote) quote = '\0';
+                    else if (quote == '"' && c == '\\') i++;
+                }
+                else if (c is '"' or '\'' && (i == 0 || line[i - 1] is ' ' or '[' or '{' or ',' or ':')) quote = c;
+                else if (c == '#' && (i == 0 || line[i - 1] is ' ' or '\t')) return line[..i];
+            }
+            return line;
+        }
+
+        private static int Depth(string s)
+        {
+            int depth = 0;
+            char quote = '\0';
+            foreach (char c in s)
+            {
+                if (quote != '\0') { if (c == quote) quote = '\0'; }
+                else if (c is '"' or '\'') quote = c;
+                else if (c is '[' or '{') depth++;
+                else if (c is ']' or '}') depth--;
+            }
+            return depth;
+        }
     }
 
     private static string? Read(string path)

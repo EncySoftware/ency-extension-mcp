@@ -65,12 +65,12 @@ public static class PackageCheck
                     category = tag["category:".Length..].ToLowerInvariant();
             }
             // The store reads the SDK from here too (a package made with `dotnet pack` has no
-            // package.info.json at all), and takes the higher of the two.
-            nuspecSdk = doc.Descendants()
-                .Where(x => x.Name.LocalName == "dependency"
-                            && string.Equals((string?)x.Attribute("id"), ProjectLayout.SdkPackageId, StringComparison.OrdinalIgnoreCase))
-                .Select(x => LowerBound((string?)x.Attribute("version")))
-                .FirstOrDefault(v => v != null);
+            // package.info.json at all), and takes the higher of the two. Of several groups naming
+            // it, the highest — the store's NuspecReader.sdkDependency.
+            foreach (var dep in doc.Descendants().Where(x => x.Name.LocalName == "dependency"
+                         && string.Equals((string?)x.Attribute("id"), ProjectLayout.SdkPackageId, StringComparison.OrdinalIgnoreCase)))
+                if (LowerBound((string?)dep.Attribute("version")) is { } low
+                    && (nuspecSdk == null || CompareVersions(low, nuspecSdk) > 0)) nuspecSdk = low;
         }
 
         foreach (var e in archive.Entries)
@@ -81,7 +81,8 @@ public static class PackageCheck
             if (name.EndsWith(".settings.json", StringComparison.OrdinalIgnoreCase)) manifest = true;
             else if (ext.Equals(".dll", StringComparison.OrdinalIgnoreCase)) assembly = true;
             else if (name.Equals("readme.md", StringComparison.OrdinalIgnoreCase)) readme = true;
-            else if (name.Equals("package.info.json", StringComparison.OrdinalIgnoreCase) && !manifestRead)
+            // The store's own pick: the first entry whose name ends in package.info.json, wherever it sits.
+            else if (e.FullName.EndsWith("package.info.json", StringComparison.OrdinalIgnoreCase) && !manifestRead)
             {
                 manifestRead = true;
                 (sdk, declaration) = ManifestOf(e);
@@ -105,25 +106,107 @@ public static class PackageCheck
             return reader.ReadToEnd();
         });
         return new PackageFacts(id, version, marker, category, manifest, assembly, readme, icon, screenshots,
-                                Higher(sdk, nuspecSdk), declaration, layout);
+                                SdkOf(sdk, nuspecSdk), declaration, layout);
     }
 
-    /** `[3.0.15]`, `3.0.15` or `[3.0.15, )` → 3.0.15; null when there is no lower bound to read. */
+    // ---- the SDK the package needs, read exactly as the store reads it (backend PackageSdk, SemVers)
+
+    private static readonly System.Text.RegularExpressions.Regex Core = new(
+        @"^([0-9]+)(?:\.([0-9]+))?(?:\.([0-9]+))?(?:\.([0-9]+))?(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$");
+
+    /**
+     * PackageSdk.Reading.version(): both sides cleaned, then package.info.json's unless the nuspec's
+     * ranks higher. A release outranks its own prerelease, so 3.0.15-dev.3 beside 3.0.15 reads as 3.0.15.
+     */
+    internal static string? SdkOf(string? manifest, string? nuspec)
+    {
+        string? a = CleanSdk(manifest), b = CleanSdk(nuspec);
+        if (a == null) return b;
+        if (b == null) return a;
+        return CompareVersions(a, b) >= 0 ? a : b;
+    }
+
+    /** PackageSdk.clean: the lower bound, spelled the NuGet way; null when that is no version or longer than 64. */
+    internal static string? CleanSdk(string? raw)
+    {
+        string? low = LowerBound(raw);
+        if (low == null) return null;
+        string v = Normalize(low);
+        return Core.IsMatch(v) && v.Length <= 64 ? v : null;
+    }
+
+    /** NuspecReader.lowerBound: `[3.0.15]`, `3.0.15`, `[3.0.15, )` → 3.0.15; null when there is no lower bound. */
     private static string? LowerBound(string? range)
     {
-        if (string.IsNullOrWhiteSpace(range)) return null;
-        string v = range.Trim().TrimStart('[', '(').Split(',')[0].Trim().TrimEnd(']', ')').Trim();
-        return v.Length > 0 && v.Length <= 64 ? v : null;
+        if (range == null) return null;
+        string s = range.Trim();
+        if (s.StartsWith('[') || s.StartsWith('(')) s = s[1..];
+        int comma = s.IndexOf(',');
+        string low = (comma >= 0 ? s[..comma] : s).Replace("]", "").Replace(")", "").Trim();
+        int plus = low.IndexOf('+');
+        if (plus >= 0) low = low[..plus];
+        return low.Length == 0 || !char.IsDigit(low[0]) ? null : low;
     }
 
-    /** The higher of two SDK versions, as the store takes it; either one when the other is missing or unreadable. */
-    private static string? Higher(string? a, string? b)
+    /** SemVers.normalize: three numeric parts, no leading zeros, a fourth only when it is not zero. */
+    private static string Normalize(string v)
     {
-        Version? na = Numeric(a), nb = Numeric(b);
-        if (na == null) return nb != null ? b : a ?? b;
-        if (nb == null) return a;
-        return nb > na ? b : a;
+        string t = v.Trim();
+        var m = Core.Match(t);
+        if (!m.Success) return t;
+        static string Digits(System.Text.RegularExpressions.Group g)
+        {
+            if (!g.Success) return "0";
+            string s = g.Value.TrimStart('0');
+            return s.Length == 0 ? "0" : s;
+        }
+        var sb = new System.Text.StringBuilder(Digits(m.Groups[1])).Append('.').Append(Digits(m.Groups[2])).Append('.').Append(Digits(m.Groups[3]));
+        if (m.Groups[4].Success && Digits(m.Groups[4]) != "0") sb.Append('.').Append(Digits(m.Groups[4]));
+        return sb.Append(m.Groups[5].Value).Append(m.Groups[6].Value).ToString();
     }
+
+    /** SemVers.compare: numeric parts as numbers of any length, then a release above its prereleases, then the labels. */
+    internal static int CompareVersions(string a, string b)
+    {
+        static (string Core, string Pre) Split(string v)
+        {
+            int plus = v.IndexOf('+');
+            if (plus >= 0) v = v[..plus];
+            int dash = v.IndexOf('-');
+            return dash >= 0 ? (v[..dash], v[(dash + 1)..]) : (v, "");
+        }
+        var (ac, ap) = Split(a);
+        var (bc, bp) = Split(b);
+        string[] pa = ac.Split('.'), pb = bc.Split('.');
+        for (int i = 0; i < Math.Max(pa.Length, pb.Length); i++)
+        {
+            int c = CompareDigits(i < pa.Length ? pa[i] : "0", i < pb.Length ? pb[i] : "0");
+            if (c != 0) return c;
+        }
+        if ((ap.Length > 0) != (bp.Length > 0)) return ap.Length > 0 ? -1 : 1;
+        if (ap.Length == 0) return 0;
+        string[] ai = ap.Split('.'), bi = bp.Split('.');
+        for (int i = 0; i < Math.Max(ai.Length, bi.Length); i++)
+        {
+            if (i >= ai.Length) return -1;
+            if (i >= bi.Length) return 1;
+            bool xn = IsNumeric(ai[i]), yn = IsNumeric(bi[i]);
+            int c = xn && yn ? CompareDigits(ai[i], bi[i])
+                  : xn ? -1
+                  : yn ? 1
+                  : Math.Sign(string.Compare(ai[i], bi[i], StringComparison.OrdinalIgnoreCase));
+            if (c != 0) return c;
+        }
+        return 0;
+    }
+
+    private static int CompareDigits(string x, string y)
+    {
+        string a = IsNumeric(x) ? x.TrimStart('0') : "", b = IsNumeric(y) ? y.TrimStart('0') : "";
+        return a.Length != b.Length ? a.Length.CompareTo(b.Length) : Math.Sign(string.CompareOrdinal(a, b));
+    }
+
+    private static bool IsNumeric(string s) => s.Length > 0 && s.All(c => c is >= '0' and <= '9');
 
     /** The two things the manifest is read for, in one pass over it. */
     private static (string? Sdk, ScheduleADeclaration? Declaration) ManifestOf(ZipArchiveEntry e)
@@ -133,8 +216,11 @@ public static class PackageCheck
             using var s = e.Open();
             using var doc = JsonDocument.Parse(s);
             var root = doc.RootElement;
-            string? sdk = root.TryGetProperty("sdkVersion", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-            return (sdk, ScheduleA.Read(root));
+            // Jackson's asText: a number reads as its text; null, missing or blank as nothing.
+            string? sdk = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("sdkVersion", out var v)
+                ? v.ValueKind switch { JsonValueKind.String => v.GetString(), JsonValueKind.Number => v.GetRawText(), _ => null }
+                : null;
+            return (string.IsNullOrWhiteSpace(sdk) ? null : sdk, ScheduleA.Read(root));
         }
         catch (JsonException) { return (null, null); }
     }
@@ -172,7 +258,9 @@ public static class PackageCheck
                                        + string.Join(", ", categories.Select(c => c.Id)) + "."));
 
         if (f.Screenshots == 0)
-            found.Add(new Finding(false, "no screenshots — the card gets no cover picture (images under src/screenshots become one)."));
+            // Said of the package, not of the template's layout: connect_to_store lists it for a csproj of its own.
+            found.Add(new Finding(false, "no screenshots — the card gets no cover picture (images packed under a screenshots/ "
+                                       + "folder, such as build/screenshots/, become one)."));
         if (!f.HasReadme)
             found.Add(new Finding(false, "no readme — the card page shows the one-line description and nothing else."));
         if (!f.HasIcon)
