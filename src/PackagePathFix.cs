@@ -76,9 +76,11 @@ public static class PackagePathFix
             string where = $"line {line}, {kind} {item}";
             var (value, holder, misspelt) = PackagePathOf(el);
 
-            if (misspelt is { } wrong && Split(wrong.Value).Any(IsContentFiles))
-                problems.Add($"{where}: the metadata is spelled `{wrong.Name}`, and NuGet reads only `PackagePath` - rename it, "
-                             + "then call connect_to_store again.");
+            // Whatever its value: NuGet ignores the name, so a packed item goes under content/ and
+            // contentFiles/ both, as if it had no PackagePath at all.
+            if (misspelt is { } wrong && Packed(el, items))
+                problems.Add($"{where}: the metadata is spelled `{wrong.Name}`, and NuGet reads only `PackagePath` - it ignores this "
+                             + "one and packs the files under content/ and contentFiles/ both. Rename it, then call connect_to_store again.");
 
             if (value == null)
             {
@@ -411,6 +413,8 @@ public static class PackagePathFix
         var child = el.Elements().FirstOrDefault(c => c.Name.LocalName == "PackagePath");
         if (child != null) return (child.Value, child, null);
         // NuGet looks the name up as written (an ordinal compare): `packagepath` is ignored altogether.
+        // Measured with dotnet pack, SDK 10.0.401 (09.10.2026): packagepath="build/", PACKAGEPATH="build/" and a
+        // <packagepath> child all put their file in content/ and contentFiles/any/net10.0/; PackagePath="build/" in build/.
         var other = el.Attributes().FirstOrDefault(x => x.Name.LocalName.Equals("PackagePath", StringComparison.OrdinalIgnoreCase));
         if (other != null) return (null, null, (other.Name.LocalName, other.Value));
         var otherChild = el.Elements().FirstOrDefault(c => c.Name.LocalName.Equals("PackagePath", StringComparison.OrdinalIgnoreCase));

@@ -146,6 +146,51 @@ public class PackagePathFixTests
         Assert.Contains(plan.Problems, p => p.Contains("`packagepath`"));
     }
 
+    /**
+     * NuGet reads the name `PackagePath` as written and ignores any other case — whatever the value. A real
+     * `dotnet pack` (SDK 10.0.401, 09.10.2026) put files with packagepath="build/", PACKAGEPATH="build/" and a
+     * <packagepath> child all in content/ and contentFiles/any/net10.0/, and PackagePath="build/" in build/.
+     * So it is reported on every packed item, not only on one whose value names contentFiles.
+     */
+    [Fact]
+    public void A_PackagePath_in_another_case_is_reported_on_every_packed_item_whatever_its_value()
+    {
+        string items = "    <None Update=\"a.json\" Pack=\"true\" packagepath=\"build/\" CopyToOutputDirectory=\"Always\" />\n"
+                     + "    <None Include=\"b.json\" Pack=\"true\" PACKAGEPATH=\"build\\\" />\n"
+                     + "    <None Update=\"c.json\" Pack=\"true\">\n      <packagepath>build\\</packagepath>\n    </None>\n"
+                     + "    <Content Include=\"d.json\" Packagepath=\"build\\\" />\n"
+                     + "    <None Include=\"e.json\" packagepath=\"build\\\" />";   // not packed: NuGet never sees it
+        var plan = Plan(items);
+
+        Assert.Empty(plan.Edits);
+        Assert.Equal(Csproj(items), plan.Text);
+        Assert.Equal(new[] { "packagepath", "PACKAGEPATH", "packagepath", "Packagepath" },
+                     plan.Problems.Select(p => System.Text.RegularExpressions.Regex.Match(p, "spelled `([^`]+)`").Groups[1].Value).ToArray());
+        Assert.All(plan.Problems, p => Assert.Contains("NuGet reads only `PackagePath` - it ignores this one and packs the files "
+                                                      + "under content/ and contentFiles/ both", p));
+    }
+
+    /** LinkBase puts a file from outside the project under that folder of the output, plus what its wildcard matched. */
+    [Fact]
+    public void A_LinkBase_is_the_folder_the_files_land_in()
+    {
+        var plan = Plan("    <None Include=\"..\\shared\\*.json\" LinkBase=\"Shared\\\" Pack=\"true\" PackagePath=\"contentFiles\\any\\any\\\" CopyToOutputDirectory=\"Always\" />\n"
+                      + "    <None Include=\"..\\common\\*.png\" LinkBase=\"$(Assets)\" Pack=\"true\" PackagePath=\"contentFiles\\any\\any\\\" CopyToOutputDirectory=\"Always\" />");
+
+        Assert.Equal("build\\Shared\\", Assert.Single(plan.Edits).After);
+        Assert.Contains("its LinkBase `$(Assets)` uses MSBuild properties or metadata - set PackagePath by hand", Assert.Single(plan.Problems));
+    }
+
+    /** An Update of Content changes an item included elsewhere, whose folder NuGet appends is not known here. */
+    [Fact]
+    public void An_Update_of_a_Content_item_is_reported()
+    {
+        var plan = Plan("    <Content Update=\"MyExt.settings.json\" PackagePath=\"contentFiles\\any\\any\\\" CopyToOutputDirectory=\"Always\" />");
+
+        Assert.Empty(plan.Edits);
+        Assert.Contains("an Update of a Content item changes one included elsewhere", Assert.Single(plan.Problems));
+    }
+
     [Fact]
     public void Comments_and_items_that_are_not_packed_are_not_touched()
     {
